@@ -8,3 +8,5 @@ node_modules/
 *.part
 # full three.js npm tarball (unused by the build; web/package/ holds the extracted files it needs)
 web/three-*.tgz
+# local web server folder (copy of the delivered build)
+serve/
