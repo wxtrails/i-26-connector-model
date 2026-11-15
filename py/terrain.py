@@ -56,6 +56,32 @@ def conform(surf):
     # deck mask for later use (e.g. shadows) not needed
     np.save(W+'/terrain_conf.npy',out); np.save(W+'/road_dist.npy',d.astype(np.float32))
     return out,d
+def clamp_under_roads(surf,H,margin_g=0.3,margin_d=1.5):
+    """Keep the rendered terrain below every road surface.
+    The viewer draws terrain as triangles between grid points FINE m apart, so a grid point is limited by the lowest
+    pavement anywhere within one grid step of it (minus a margin): then no terrain triangle can rise through a road."""
+    import matplotlib.tri as mtri
+    from scipy.ndimage import minimum_filter
+    h,w=H.shape; RM=np.full((h,w),np.inf,np.float32)
+    for i,s in enumerate(surf.sheets):
+        t=s['t']
+        if len(t)==0: continue
+        x0,y0,x1,y1=s['poly'].bounds
+        c0=max(0,int((x0-SX0)/RES)-1); c1=min(w,int((x1-SX0)/RES)+2); r0=max(0,int((SY1-y1)/RES)-1); r1=min(h,int((SY1-y0)/RES)+2)
+        if c1<=c0 or r1<=r0: continue
+        X,Y=np.meshgrid(SX0+(np.arange(c0,c1)+0.5)*RES,SY1-(np.arange(r0,r1)+0.5)*RES)
+        zz=surf.z[surf.off[i]:surf.off[i+1]]
+        z=np.ma.filled(mtri.LinearTriInterpolator(mtri.Triangulation(s['v'][:,0],s['v'][:,1],t),zz)(X,Y),np.nan)
+        # vertices too: the raster cells alone can miss narrow slivers of pavement
+        vc=((s['v'][:,0]-SX0)/RES).astype(int); vr=((SY1-s['v'][:,1])/RES).astype(int); ok=(vc>=0)&(vc<w)&(vr>=0)&(vr<h)
+        m=margin_d if s['kind']=='D' else margin_g
+        sub=RM[r0:r1,c0:c1]; f=np.isfinite(z); sub[f]=np.minimum(sub[f],z[f]-m)
+        np.minimum.at(RM,(vr[ok],vc[ok]),(zz[ok]-m).astype(np.float32))
+    k=2*int(np.ceil((FINE+RES)/RES))+1
+    RM=minimum_filter(RM,size=k,mode='nearest')
+    n=int((H>RM).sum()); H=np.minimum(H,RM).astype(np.float32)
+    print('clamped terrain cells under roads',n)
+    return H
 def sample(H,x,y):
     c=(np.asarray(x)-SX0)/RES-0.5; r=(SY1-np.asarray(y))/RES-0.5
     return map_coordinates(H,[r,c],order=1,mode='nearest')
@@ -63,6 +89,7 @@ if __name__=='__main__':
     surf=Surf()
     H,d=conform(surf)
     print('conformed',H.shape,H.min(),H.max())
+    H=clamp_under_roads(surf,H); np.save(W+'/terrain_conf.npy',H)
     nx=int((SX1-SX0)/TILE); ny=int((SY1-SY0)/TILE)
     # fine tiles: near roads
     plan=pickle.load(open(W+'/sheets_plan2.pkl','rb'))
