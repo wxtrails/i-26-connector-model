@@ -238,6 +238,12 @@ def load_all():
             if dname=='in' and not v['dual'] and hw[k]>8: continue
             chains[f'e_{k}_{dname}']={'xy':v[dname],'sig':45.0,'sig_ex':45.0,'ext':True}
             if hw[k]>0: synth.append(sg.LineString(v[dname]).buffer(hw[k] if (v['dual'] or hw[k]>8) else 12.0,cap_style=2))
+    # where the plan shows lanes next to an extension, size its pavement from the plan's lane layout instead (lanes_ext.py)
+    import lanes_ext as LE
+    LT=LE.build(chains=chains,E=E,hwf=globals()['hw']); pickle.dump(LT,open(W+'/lanes_ext.pkl','wb'))
+    if LT:
+        keep=[g for g in synth if not any(g.distance(sg.LineString(E[k]['out']))<1.0 for k in LT)]
+        synth=keep+[LE.pavement(LT)]
     allp=shapely.unary_union([G]+[d['poly'] for d in plan['decks']])
     S=shapely.unary_union(synth).difference(allp.buffer(3.0)).buffer(3.2).difference(shapely.unary_union([d['poly'] for d in plan['decks']]))
     plan['synth']=shapely.unary_union(synth)

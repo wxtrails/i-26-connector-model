@@ -1,6 +1,7 @@
 """Buildings, storefront signs, trees, far terrain, synthesized markings."""
 import sys; sys.path.insert(0,__import__('os').path.dirname(__import__('os').path.abspath(__file__)))
 from common import *
+import os
 import shapely, shapely.geometry as sg
 from scipy.spatial import cKDTree
 from PIL import Image
@@ -112,6 +113,7 @@ def run():
     # ---------- synthesized lane markings on extension legs
     from marks import Strips
     wh=Strips(); ye=Strips(); done=set()
+    LT=pickle.load(open(W+'/lanes_ext.pkl','rb')) if os.path.exists(W+'/lanes_ext.pkl') else {}
     def emit(st,P3,dashed,w=0.15):
         if len(P3)<2: return
         if not dashed: st.add(P3[:,:2],P3[:,2],w); return
@@ -121,7 +123,7 @@ def run():
     for r in R:
         Q=r['P']; t=np.gradient(Q,axis=0); t/=np.hypot(t[:,0],t[:,1])[:,None]+1e-9; nr=np.c_[t[:,1],-t[:,0]]
         legs=[l for rid,grp,name,l in __import__('routes').ROUTES if rid==r['id']][0]
-        isext=np.array([legs[k][0].startswith('e_') for k in r['lid']]); south=np.array(['south' in legs[k][0] for k in r['lid']])
+        isext=np.array([legs[k][0].startswith('e_') and legs[k][0].split('_')[1] not in LT for k in r['lid']]); south=np.array(['south' in legs[k][0] for k in r['lid']])
         two=np.array([legs[k][3] for k in r['lid']])
         key=np.array([(round(p[0]/3),round(p[1]/3)) in done for p in Q]); 
         new=isext&~key

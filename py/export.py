@@ -106,7 +106,7 @@ def stage_roads(surf):
     put('piers',np.array(PIER,np.float32)); print('piers',len(PIER))
 def stage_extra():
     mk=pickle.load(open(W+'/marks.pkl','rb')); sc=pickle.load(open(W+'/scenery.pkl','rb'))
-    put('mk_w_p',mk['white'][0]); put('mk_w_i',mk['white'][1]); put('conc_p',mk['conc'][0]); put('conc_i',mk['conc'][1])
+    put('mk_w_p',mk['white'][0]); put('mk_w_i',mk['white'][1]); put('mk_y_p',mk['yellow'][0]); put('mk_y_i',mk['yellow'][1]); put('conc_p',mk['conc'][0]); put('conc_i',mk['conc'][1])
     put('syn_w_p',sc['syn_w'][0]); put('syn_w_i',sc['syn_w'][1]); put('syn_y_p',sc['syn_y'][0]); put('syn_y_i',sc['syn_y'][1])
     for k in ('bld_xy','bld_n','bld_h','bld_t','trees','far'): put(k,sc[k])
     man['far']=sc['far_meta']; man['signs']=sc['signs']

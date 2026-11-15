@@ -1,6 +1,7 @@
 """Lane lines, edge lines, barriers and walls draped on the road surface."""
 import sys; sys.path.insert(0,__import__('os').path.dirname(__import__('os').path.abspath(__file__)))
 from common import *
+import os
 from surf import Surf
 import shapely, shapely.geometry as sg
 from scipy.spatial import cKDTree
@@ -107,11 +108,23 @@ def build(surf=None):
         a=densify(simp(a),8.0); white.add(a,pk.z(a),0.15)
     eot=dedupe(lines_of(L,('Prop EOT','s')))+[a for a in K['EOT'] if a[:,1].mean()<208250]
     # chain EOT pieces coarsely: just draw each piece
-    n=0
+    # an edge line with pavement on both sides is a plan match line drawn across a road that continues: skip those parts
+    Gf=pickle.load(open(W+'/sheets_plan2.pkl','rb'))['G']; shapely.prepare(Gf)
+    def open_edge(a):
+        t=np.gradient(a,axis=0); t/=np.hypot(t[:,0],t[:,1])[:,None]+1e-9; nr=np.c_[-t[:,1],t[:,0]]
+        both=shapely.contains(Gf,shapely.points(a+nr*1.5))&shapely.contains(Gf,shapely.points(a-nr*1.5))
+        _,j=pk.tree.query(a); across=np.abs(np.sum(pk.T[j]*t,axis=1))<0.5      # runs across the nearest alignment
+        return ~(both&across)
+    n=0; ncut=0
     for a in eot:
         if np.hypot(*np.diff(a,axis=0).T).sum()<0.5: continue
-        a=densify(simp(a,0.08),8.0); white.add(a,pk.z(a),0.15); n+=1
-    print('eot',n)
+        a=densify(simp(a,0.08),2.0); keep=open_edge(a); z=pk.z(a)
+        if not keep.all(): ncut+=1
+        idx=np.where(keep)[0]
+        for r in (np.split(idx,np.where(np.diff(idx)>1)[0]+1) if len(idx) else []):
+            if len(r)<2: continue
+            b=densify(simp(a[r],0.08),8.0); white.add(b,pk.z(b),0.15); n+=1
+    print('eot',n,'edge lines trimmed where the road continues',ncut)
     for a in dedupe(lines_of(L,('Prop Paint Stripe','s'))):
         a=densify(simp(a),8.0); white.add(a,pk.z(a),0.2)
     nb=0
@@ -124,8 +137,26 @@ def build(surf=None):
             from terrain import sample; T=np.load(W+'/terrain_conf.npy'); z=sample(T,a[:,0],a[:,1])
         conc.wall(a,z,4.5)
     print('barrier lines',nb)
-    return white.get(),conc.get()
+    # lanes carried past the plan limits (lanes_ext.py)
+    import lanes_ext as LE
+    yellow=Strips(); T=pickle.load(open(W+'/lanes_ext.pkl','rb')) if os.path.exists(W+'/lanes_ext.pkl') else {}
+    def dashes(a,z,period=12.0,on=3.0):
+        s=np.r_[0,np.cumsum(np.hypot(*np.diff(a,axis=0).T))]
+        for s0 in np.arange(0,s[-1]-on,period):
+            ss=np.linspace(s0,s0+on,3); q=np.c_[np.interp(ss,s,a[:,0]),np.interp(ss,s,a[:,1])]; white.add(q,np.interp(ss,s,z),0.15)
+    nt=0
+    for a,kd in LE.paint(T):
+        a=densify(simp(a,0.05),4.0); z=pk.z(a); nt+=1
+        if kd=='dash': dashes(a,z)
+        elif kd=='white': white.add(a,z,0.15)
+        else: yellow.add(a,z,0.15)
+    Graw=pickle.load(open(W+'/sheets_plan.pkl','rb'))['G']; Gf=pickle.load(open(W+'/sheets_plan2.pkl','rb'))['G']
+    stubs=LE.stub_extensions(Graw,Gf,[sg.LineString(a) for a in ll],exclude=LE.pavement(T) if T else None)
+    for a in stubs:
+        a=densify(a,4.0); dashes(a,pk.z(a))
+    print('carried lane lines',nt,'stub continuations',len(stubs))
+    return white.get(),conc.get(),yellow.get()
 if __name__=='__main__':
-    (wp,wi),(cp,ci)=build()
-    print(wp.shape,wi.shape,cp.shape,ci.shape)
-    pickle.dump({'white':(wp,wi),'conc':(cp,ci)},open(W+'/marks.pkl','wb'))
+    (wp,wi),(cp,ci),(yp,yi)=build()
+    print(wp.shape,wi.shape,cp.shape,ci.shape,yp.shape)
+    pickle.dump({'white':(wp,wi),'conc':(cp,ci),'yellow':(yp,yi)},open(W+'/marks.pkl','wb'))
