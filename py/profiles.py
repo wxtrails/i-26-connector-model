@@ -20,7 +20,37 @@ def longside(p):
     return max(np.hypot(xs[k+1]-xs[k],ys[k+1]-ys[k]) for k in range(4))
 def deck_at(plan,pt):
     p=sg.Point(*pt); return min(range(len(plan['decks'])),key=lambda k:plan['decks'][k]['poly'].distance(p))
-def classify(chains,plan,noride=()):
+def continue_runs(cid,s,P,st,decks,dpoly,h,ext=150.0):
+    """A road that is on a bridge stays on the structure it runs into:
+      * a stretch inside a deck that touches the deck the road is already on counts as on the bridge, however short
+        (a divided road whose directions split onto two parallel structures runs along the seam between them);
+      * past the end of its deck run, the road stays up while that same deck still covers part of its carriageway
+        (half-width h), until the structure ends.
+    Roads that merely pass under or beside a bridge never start a deck run, so they are not affected."""
+    t=np.gradient(P,axis=0); t/=np.hypot(t[:,0],t[:,1])[:,None]+1e-9; n=np.c_[-t[:,1],t[:,0]]
+    offs=np.linspace(-h,h,23); pts=shapely.points(P); before=st.copy()
+    def runs(mask):
+        idx=np.where(mask)[0]
+        return [r for r in np.split(idx,np.where(np.diff(idx)>1)[0]+1) if len(r)] if len(idx) else []
+    changed=True
+    while changed:
+        changed=False
+        for k,dp in enumerate(dpoly):
+            ins=shapely.contains(dp,pts)&(st<0)
+            for r in runs(ins):
+                for e in (r[0]-1,r[0]-2,r[0]-3,r[-1]+1,r[-1]+2,r[-1]+3):
+                    if 0<=e<len(s) and st[e]>=0 and st[e]!=k and dpoly[st[e]].distance(dp)<1.0:
+                        st[r]=k; changed=True; break
+    def cov(k,i): return shapely.contains(dpoly[k],shapely.points(P[i]+n[i]*offs[:,None])).mean()
+    for r in runs(st>=0):
+        for i0,step in ((r[0],-1),(r[-1],1)):
+            k=st[i0]; i=i0+step
+            while 0<=i<len(s) and st[i]<0 and abs(s[i]-s[i0])<ext and cov(k,i)>=0.25:
+                st[i]=k; i+=step
+    for r in runs(st!=before):
+        print('continued',cid,'on deck',sorted(set(int(k) for k in st[r])),'%.0f m'%(s[r[-1]]-s[r[0]]+DS),'at',P[r[0]].round(),P[r[-1]].round())
+    return st
+def classify(chains,plan,noride=(),straddle=None):
     """chains: dict id -> dict(xy=Nx2, kind) ; returns per chain s, P, status(-1 at grade / deck index)"""
     decks=plan['decks']; out={}
     dpoly=[d['poly'].buffer(1.0) for d in decks]; dlong=[longside(d['poly']) for d in decks]
@@ -44,6 +74,9 @@ def classify(chains,plan,noride=()):
                             st[i:j+1]=k
                         i=j+1
                     else: i+=1
+        # stay on the structure a road is already on (see continue_runs)
+        if cid not in noride and straddle is not None and not cid.startswith(('x','e_')):
+            st=continue_runs(cid,s,P,st,decks,dpoly,straddle(cid,chains))
         # fill short at-grade gaps between deck runs
         i=0
         while i<len(s):
@@ -176,7 +209,7 @@ def load_chains_B():
     for k,v in {'b6':60,'b1':40,'b5':90,'b2':90,'b11':80,'b12':80,'b13':90,'b24':90,'b33':90,'b14':110,'b10':40,'b8':40,'b9':40,'b23':40,'b15':45,'b25':40}.items():
         if k in ch: ch[k]['lam']=float(v)
     return ch
-RIDE={'b2':[(285753,211286)]}
+RIDE={}   # (an earlier hand override put b2, the US 19/23 southbound lanes, on the I-26 bridge; it passes under it)
 if __name__=="__main__":
     plan=pickle.load(open(W+'/sheets_plan.pkl','rb'))
     chains=load_chains_B()

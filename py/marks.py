@@ -27,14 +27,30 @@ class Picker:
     def status(self,p,t):
         idx=self.tree.query_ball_point(p,32.0)
         if not idx: return None
-        idx=np.array(idx); d=np.hypot(*(self.P[idx]-p).T); c=np.abs(self.T[idx]@t)
-        k=idx[np.argmin(d+60*(1-c))]
+        idx=np.array(idx); d=np.hypot(*(self.P[idx]-p).T); c=np.clip(np.abs(self.T[idx]@t),0,1)
+        # direction counts for more than distance: lines of a road that passes under a bridge at a shallow angle lie
+        # close to the bridge's alignment but are never parallel to it (2.5 m per degree)
+        k=idx[np.argmin(d+2.5*np.degrees(np.arccos(c)))]
         return int(self.S[k])
     def z(self,P):
+        """heights for a polyline, choosing ground or deck per stretch from the nearest parallel alignment"""
         P=np.asarray(P,float)
         if len(P)<2: return self.surf.drape(P)[0]
-        m=P[len(P)//2]; t=P[-1]-P[0]; n=np.hypot(*t)
-        st=self.status(m,t/n) if n>1e-6 else None
+        t=np.gradient(P,axis=0); n=np.hypot(t[:,0],t[:,1]); t=t/(n[:,None]+1e-9)
+        st=np.array([(-2 if s_ is None else s_) for s_ in (self.status(P[i],t[i]) if n[i]>1e-6 else None for i in range(len(P)))])
+        # no flicker: stretches shorter than 3 vertices take the status of the stretch before them
+        for _ in range(2):
+            b=np.r_[0,np.where(np.diff(st)!=0)[0]+1,len(st)]
+            for a_,b_ in zip(b[:-1],b[1:]):
+                if b_-a_<3 and a_>0: st[a_:b_]=st[a_-1]
+        z=np.full(len(P),np.nan); b=np.r_[0,np.where(np.diff(st)!=0)[0]+1,len(st)]
+        for a_,b_ in zip(b[:-1],b[1:]):
+            lo,hi=max(0,a_-1),min(len(P),b_+1)     # overlap one vertex so the pieces join
+            zz=self._z(P[lo:hi],None if st[a_]==-2 else int(st[a_]))
+            seg=z[lo:hi]; m=np.isnan(seg); seg[m]=zz[m]; z[lo:hi]=seg
+        return z
+    def _z(self,P,st):
+        if len(P)<2: return self.surf.drape(P)[0]
         cand=self.surf.cands(P); order=[]
         if st is not None:
             pref=self.gs if st<0 else self.ds.get(st,[])

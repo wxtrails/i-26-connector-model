@@ -276,8 +276,8 @@ def load_all():
     return plan,chains
 if __name__=='__main__':
     plan,chains=load_all()
-    cls=classify(chains,plan,noride={'b1','b10'})
-    chains=add_axis_chains(chains,plan,cls); cls=classify(chains,plan,noride={'b1','b10'})
+    cls=classify(chains,plan,noride={'b1','b10'},straddle=hw)
+    chains=add_axis_chains(chains,plan,cls); cls=classify(chains,plan,noride={'b1','b10'},straddle=hw)
     plan=patch_plan(chains,plan,cls); pickle.dump(plan,open(W+'/sheets_plan2.pkl','wb'))
     cls=design2(chains,plan,cls,verbose=True)
     pickle.dump({'chains':chains,'cls':cls},open(W+'/profiles.pkl','wb'))
