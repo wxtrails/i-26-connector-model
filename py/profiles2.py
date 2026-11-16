@@ -213,6 +213,11 @@ def trim_spurs(plan,cls,r=6.0,verbose=True):
     for k,d in enumerate(plan['decks']):
         p=d['poly']
         if d.get('src')!='pdf' or p.geom_type!='Polygon': continue
+        # notches and slots under 5 m wide are drawing artefacts (joint lines, gaps between traced fills), not openings
+        q=p.buffer(2.5,join_style=2).buffer(-2.5,join_style=2)
+        if q.geom_type=='Polygon' and q.area-p.area>3:
+            if verbose: print('deck',k,'closed %.0f m2 of narrow notches'%(q.area-p.area))
+            p=d['poly']=q
         runs=[]
         for c,v in cls.items():
             idx=np.where(v['st']==k)[0]
@@ -222,7 +227,8 @@ def trim_spurs(plan,cls,r=6.0,verbose=True):
         core=p.buffer(-r,join_style=2).buffer(r,join_style=2).intersection(p)
         if core.area<0.6*p.area: continue
         rl=shapely.unary_union(runs).buffer(1.0); spurs=polyonly(p.difference(core.buffer(0.05)))
-        drop=[g for g in getattr(spurs,'geoms',[spurs]) if g.area>15 and not g.intersects(rl)]
+        drop=[g for g in getattr(spurs,'geoms',[spurs]) if g.area>15 and not g.intersects(rl)
+              and g.boundary.intersection(core.buffer(0.3)).length<0.35*g.boundary.length]     # it sticks out: joined to the deck only at its root
         if not drop: continue
         new=polyonly(p.difference(shapely.unary_union(drop).buffer(0.1)).buffer(-0.3).buffer(0.3))
         if new.geom_type!='Polygon': new=max(new.geoms,key=lambda g:g.area)
@@ -238,6 +244,20 @@ def trim_spurs(plan,cls,r=6.0,verbose=True):
         if bands:
             patch=shapely.unary_union(bands).intersection(tg).difference(new.buffer(-0.5))
             plan['G']=polyonly(shapely.unary_union([plan['G'],patch]).buffer(0))
+    # small gaps fully enclosed by bridge deck (where one traced outline stops short of the next) are deck too:
+    # give each to the deck it shares the longest edge with
+    decks=plan['decks']; DU=shapely.unary_union([d['poly'] for d in decks])
+    for g in getattr(DU,'geoms',[DU]):
+        for h in (g.interiors if g.geom_type=='Polygon' else []):
+            hp=sg.Polygon(h)
+            if not 3<hp.area<400: continue
+            # ...unless a road passes through it at ground level: then it is the opening that road runs under
+            if any(((v['st']<0)&shapely.contains(hp.buffer(2.0),shapely.points(v['P']))).any() for v in cls.values()): continue
+            k=max(range(len(decks)),key=lambda k:hp.boundary.intersection(decks[k]['poly'].buffer(0.3)).length)
+            new=polyonly(shapely.unary_union([decks[k]['poly'],hp.buffer(0.3)]).buffer(0))
+            if new.geom_type=='Polygon':
+                decks[k]['poly']=new
+                if verbose: print('deck',k,'filled an enclosed gap of %.0f m2 at'%hp.area,[round(v) for v in hp.centroid.coords[0]])
     return plan
 def patch_plan(chains,plan,cls):
     """fill holes in pavement along alignments (under crossing bridges, at plan seams, between bridge pieces)"""

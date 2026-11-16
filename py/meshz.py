@@ -38,6 +38,8 @@ def run(planfile='/sheets_plan2.pkl'):
             ok=np.isfinite(d)
             if key<0 and gi>=len(gl): ok&=~under
             D[gi,ok]=d[ok]; Zc[gi,ok]=zz[j[ok]]; Mr[gi,ok]=d[ok]/hw(c,chains); Ed[gi,ok]=np.maximum(d[ok]-hw(c,chains),0.0)
+            # ground-level pavement next to a bridge is a ground-level road's unless none is within 8 m of it
+            if key<0 and gi>=len(gl): Ed[gi,ok]+=8.0
         if len(cand):
             # a point belongs to the road whose carriageway it lies in, else to the one whose edge is nearest (a wide
             # road must not claim the aprons of a narrow ramp beside it just because its half-width is large)
