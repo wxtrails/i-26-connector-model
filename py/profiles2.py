@@ -11,7 +11,7 @@ def envelope(m,g):
     for i in range(len(e)-2,-1,-1): e[i]=max(e[i],e[i+1]-st)
     return e
 def relations(chains,plan,cls,verbose=False):
-    decks=plan['decks']; ids=list(chains.keys())
+    decks=plan['decks']; ids=list(chains.keys()); stack=set(plan.get('stack',()))
     lines={c:sg.LineString(cls[c]['P']) for c in ids}; tang={}
     for c in ids:
         P=cls[c]['P']; t=np.gradient(P,axis=0); t/=np.hypot(t[:,0],t[:,1])[:,None]+1e-9; tang[c]=t
@@ -29,6 +29,11 @@ def relations(chains,plan,cls,verbose=False):
                 i=min(int(round(lines[A].project(p)/DS)),len(PA)-1); j=min(int(round(lines[Bc].project(p)/DS)),len(PB)-1)
                 if abs(tang[A][i]@tang[Bc][j])>0.985: continue
                 ka,kb=sa[i],sb[j]
+                if (A,Bc) in stack or (Bc,A) in stack:      # stacked crossing on one merged bridge outline (split_stacked)
+                    up,lo=((A,i),(Bc,j)) if (A,Bc) in stack else ((Bc,j),(A,i))
+                    over.append((up[0],up[1],lo[0],lo[1])); stA.append(i)
+                    if verbose: print('crossing',up[0],'over',lo[0],(round(p.x),round(p.y)),'(stacked)')
+                    continue
                 if ka==kb: pins.append((A,i,Bc,j)); continue
                 if ka>=0 and kb<0: up,lo=(A,i),(Bc,j)
                 elif kb>=0 and ka<0: up,lo=(Bc,j),(A,i)
@@ -132,6 +137,56 @@ def hw(c,chains=None):
     if c.startswith('x'): return 8.0 if chains and chains[c].get('cls')=='motorway' else 5.0
     if c.startswith('y'): return 6.0
     return 4.5
+def split_stacked(chains,plan,cls,verbose=True):
+    """Two roads that cross at an angle while both sit on the same bridge outline are stacked, not level: the plan's
+    structure fills merge where one bridge passes over another. The road with the longer run on that outline is the
+    bridge itself and goes over; the other road's stretch is cut out into its own deck, below."""
+    decks=plan['decks']; ids=[c for c in cls if not c.startswith(('x','e_'))]
+    lines={c:sg.LineString(cls[c]['P']) for c in ids}; stack=set(plan.get('stack',()))
+    def run(c,i):
+        st=cls[c]['st']; k=st[i]; a=i; b=i
+        while a>0 and st[a-1]==k: a-=1
+        while b<len(st)-1 and st[b+1]==k: b+=1
+        return a,b
+    n=0
+    for x in range(len(ids)):
+        for y in range(x+1,len(ids)):
+            A,B=ids[x],ids[y]
+            if lines[A].distance(lines[B])>1: continue
+            X=lines[A].intersection(lines[B])
+            for p in [g for g in (X.geoms if hasattr(X,'geoms') else [X]) if g.geom_type=='Point']:
+                i=min(int(round(lines[A].project(p)/DS)),len(cls[A]['P'])-1); j=min(int(round(lines[B].project(p)/DS)),len(cls[B]['P'])-1)
+                k=cls[A]['st'][i]
+                if k<0 or cls[B]['st'][j]!=k: continue
+                tA=np.gradient(cls[A]['P'],axis=0)[i]; tB=np.gradient(cls[B]['P'],axis=0)[j]
+                if abs(tA@tB)/(np.hypot(*tA)*np.hypot(*tB)+1e-9)>0.985: continue      # merging or diverging, not crossing
+                ra,rb=run(A,i),run(B,j)
+                (up,ru),(lo,rl)=((A,ra),(B,rb)) if ra[1]-ra[0]>=rb[1]-rb[0] else ((B,rb),(A,ra))
+                stl=cls[lo]['st']; nbk=[stl[q] for q in (rl[0]-1,rl[1]+1) if 0<=q<len(stl) and stl[q]>=0 and stl[q]!=k]
+                if (rl[1]-rl[0]+1)*DS<60 and nbk:
+                    # a short clip of the lower road, carried on from its own bridge next door: keep it on that bridge
+                    stl[rl[0]:rl[1]+1]=nbk[0]; stack.add((up,lo)); n+=1
+                    if verbose: print('stacked',up,'over',lo,'on bridge',k,'at',(round(p.x),round(p.y)),'-> back onto its own bridge',nbk[0])
+                    continue
+                Plo=cls[lo]['P'][rl[0]:rl[1]+1]
+                if len(Plo)<2: continue
+                hl=hw(lo,chains); hu=hw(up,chains)
+                dk=decks[k]['poly']
+                L=polyonly(dk.intersection(sg.LineString(Plo).buffer(hl+1.0,cap_style=2)))
+                band=sg.LineString(cls[up]['P'][ru[0]:ru[1]+1]).buffer(hu+1.0,cap_style=2)
+                rest=polyonly(dk.difference(L.difference(band)).buffer(-0.3).buffer(0.3))
+                if L.area<40 or rest.area<40: continue
+                decks[k]=dict(decks[k],poly=rest)
+                decks.append({'poly':L,'iso':decks[k].get('iso',False),'src':'split','abut':polyonly(decks[k]['abut'].intersection(L.buffer(6))) if not decks[k]['abut'].is_empty else sg.Polygon(),
+                              'width':2*hl,'own':lo})
+                cls[lo]['st'][rl[0]:rl[1]+1]=len(decks)-1; stack.add((up,lo)); n+=1
+                if verbose: print('stacked',up,'over',lo,'on bridge',k,'at',(round(p.x),round(p.y)),'-> new deck',len(decks)-1)
+    plan['stack']=sorted(stack)
+    return plan,cls
+def polyonly(g):
+    if g.geom_type in ('Polygon','MultiPolygon'): return g
+    q=[x for x in getattr(g,'geoms',[]) if x.geom_type in ('Polygon','MultiPolygon')]
+    return shapely.unary_union(q) if q else sg.Polygon()
 def patch_plan(chains,plan,cls):
     """fill holes in pavement along alignments (under crossing bridges, at plan seams, between bridge pieces)"""
     import shapely.ops as so
@@ -278,6 +333,7 @@ if __name__=='__main__':
     plan,chains=load_all()
     cls=classify(chains,plan,noride={'b1','b10'},straddle=hw)
     chains=add_axis_chains(chains,plan,cls); cls=classify(chains,plan,noride={'b1','b10'},straddle=hw)
+    plan,cls=split_stacked(chains,plan,cls)
     plan=patch_plan(chains,plan,cls); pickle.dump(plan,open(W+'/sheets_plan2.pkl','wb'))
     cls=design2(chains,plan,cls,verbose=True)
     pickle.dump({'chains':chains,'cls':cls},open(W+'/profiles.pkl','wb'))

@@ -117,8 +117,8 @@ function meshFrom(pn,inn,mat){
 }
 (function(){
   const matAsphalt=new T.MeshLambertMaterial({color:0x4b4d51,polygonOffset:true,polygonOffsetFactor:-1,polygonOffsetUnits:-2});
-  const matDeck=new T.MeshLambertMaterial({color:0x5d5e60});
-  const matConc=new T.MeshLambertMaterial({color:0xbdb9ae,side:T.DoubleSide});
+  const matDeck=new T.MeshLambertMaterial({color:0xb4afa4});   // light concrete, as in the NCDOT renderings, so structures read apart from ground-level roads
+  const matConc=new T.MeshLambertMaterial({color:0xcfcbc1,side:T.DoubleSide});
   const matWhite=new T.MeshBasicMaterial({color:0xecece4,polygonOffset:true,polygonOffsetFactor:-4,polygonOffsetUnits:-8});
   const matYellow=new T.MeshBasicMaterial({color:0xe2b21c,polygonOffset:true,polygonOffsetFactor:-4,polygonOffsetUnits:-8});
   meshFrom('road_g_p','road_g_i',matAsphalt);
