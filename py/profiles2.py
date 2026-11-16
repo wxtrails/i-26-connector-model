@@ -3,7 +3,7 @@ import sys; sys.path.insert(0,__import__('os').path.dirname(__import__('os').pat
 from common import *
 from profiles import *
 from scipy.ndimage import gaussian_filter1d
-PRIO=['b0','b6','b10','b8','b9','b23','b1','b25','b3','b7','b5','b2']
+PRIO=['b0','b6','b10','b8','b9','b23','b1','b25','b3','b7','b5','b2','b22']   # b22 last: it sets the level of the ramp it shares with b18 north of Patton Avenue
 def gs(a,sig): return gaussian_filter1d(a,sig/DS,mode='nearest')
 def envelope(m,g):
     e=m.copy(); st=g*DS
@@ -89,13 +89,16 @@ def design2(chains,plan,cls,clear=6.8,grade=0.045,passes=4,verbose=False):
             z=np.maximum(base[c],envelope(mm,grade))
             z=gs(z,35.0); z=np.maximum(z,mm); z=gs(z,12.0)
             # pins at same-level crossings and parallel ties toward higher-priority chains
-            delta=np.zeros(m); wt=np.zeros(m)
+            delta=np.zeros(m); wt=np.zeros(m); hard=np.zeros(m,bool)
             for (A,i,B,j,dist) in par:
                 if A==c and pr[B]<pr[A]: k,o,oj=i,B,j
                 elif B==c and pr[A]<pr[B]: k,o,oj=j,A,i
                 else: continue
                 dz_=cls[o]['z'][oj]-z[k]
                 w_=min(1.0,(14-dist)/7.0)*float(np.clip(1-(abs(dz_)-3)/3,0,1))
+                # carriageways that overlap are one roadway (the shared trunk of a ramp before it splits): same level,
+                # whatever the two profiles would do on their own
+                if dist<=hw(c,chains)+hw(o,chains) and not c.startswith(('x','e_')) and not o.startswith(('x','e_')): w_=1.0; hard[k]=True
                 if w_>wt[k]: wt[k]=w_; delta[k]=dz_
             if wt.any():
                 # fill delta between tied stations smoothly, decay outside
@@ -122,7 +125,10 @@ def design2(chains,plan,cls,clear=6.8,grade=0.045,passes=4,verbose=False):
                 if best is not None:
                     t=np.clip(1-np.abs(np.arange(m)-e)*DS/min(260.0,0.6*m*DS),0,1); z=z+(best[1]-z[e])*t*t*(3-2*t)
             if chains[c].get('linear'):
-                line=np.linspace(z[0],z[-1],m); z=line+(1-chains[c]['linear'])*(z-line)
+                # straight grade from end to end; a ramp that starts on a trunk shared with another ramp keeps the
+                # trunk's level and runs straight from the split
+                hk=np.where(hard[:m//2])[0]; a0=int(hk[-1]) if len(hk) and hk[0]*DS<80 else 0
+                line=np.linspace(z[a0],z[-1],m-a0); z[a0:]=line+(1-chains[c]['linear'])*(z[a0:]-line)
             for (u,i,l,j) in over:   # hard clearance repair
                 if u!=c: continue
                 lack=cls[l]['z'][j]+clear-z[max(0,i-3):i+4].min()
@@ -176,6 +182,15 @@ def split_stacked(chains,plan,cls,verbose=True):
                 band=sg.LineString(cls[up]['P'][ru[0]:ru[1]+1]).buffer(hu+1.0,cap_style=2)
                 rest=polyonly(dk.difference(L.difference(band)).buffer(-0.3).buffer(0.3))
                 if L.area<40 or rest.area<40: continue
+                # the two roads are separate structures here: drop what is left of the merged outline between them
+                # (deck beside the lower road that no road runs on)
+                bands=[lines[c].buffer(hw(c,chains)+2.0,cap_style=2) for c in ids if lines[c].distance(L)<20.0]
+                gore=polyonly(rest.intersection(L.buffer(14.0)).difference(shapely.unary_union(bands+[L.buffer(0.5)])).buffer(-0.4).buffer(0.6))
+                if gore.area>20:
+                    rest2=polyonly(rest.difference(gore).buffer(-0.3).buffer(0.3))
+                    if rest2.area>40:
+                        if verbose: print('  removed %.0f m2 of deck'%(rest.area-rest2.area),k,'between',up,'/ other roads and',lo)
+                        rest=rest2
                 decks[k]=dict(decks[k],poly=rest)
                 decks.append({'poly':L,'iso':decks[k].get('iso',False),'src':'split','abut':polyonly(decks[k]['abut'].intersection(L.buffer(6))) if not decks[k]['abut'].is_empty else sg.Polygon(),
                               'width':2*hl,'own':lo})
@@ -276,6 +291,7 @@ def load_all():
     chains=load_chains_B()
     for c,pts in RIDE.items(): chains[c]['ride']=[deck_at(plan,p) for p in pts]
     chains['b22']['linear']=0.85
+    chains['b18']['linear']=0.85     # on structure from the split to the I-240 flyover it joins: no dip into the valley
     G=plan['G']
     for c in ('b8','b9'):
         s_,P=resample(chains[c]['xy']); z0=terr(P[:,0],P[:,1])
