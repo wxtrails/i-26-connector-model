@@ -20,7 +20,10 @@ def relations(chains,plan,cls,verbose=False):
     for a_ in range(len(ids)):
         for b_ in range(a_+1,len(ids)):
             A,Bc=ids[a_],ids[b_]
-            if lines[A].distance(lines[Bc])>14: continue
+            # roads count as running side by side out to 14 m, or as far as their carriageways overlap if that is more
+            # (a ramp's lane along the edge of a wide mainline is 20 m and more from the mainline's centreline)
+            lim=14.0 if A.startswith(('x','e_')) or Bc.startswith(('x','e_')) else max(14.0,hw(A,chains)+hw(Bc,chains))
+            if lines[A].distance(lines[Bc])>lim: continue
             PA,PB=cls[A]['P'],cls[Bc]['P']; sa,sb=cls[A]['st'],cls[Bc]['st']
             X=lines[A].intersection(lines[Bc])
             pts=[g for g in (X.geoms if hasattr(X,'geoms') else [X]) if g.geom_type=='Point']
@@ -46,7 +49,7 @@ def relations(chains,plan,cls,verbose=False):
                 over.append((up[0],up[1],lo[0],lo[1])); stA.append(i)
                 if verbose: print('crossing',up[0],'over',lo[0],(round(p.x),round(p.y)))
             dd,jj=trees[Bc].query(PA)
-            for i in np.where(dd<14)[0]:
+            for i in np.where(dd<lim)[0]:
                 j=jj[i]
                 if sa[i]!=sb[j]: continue
                 if any(abs(i-q)*DS<150 for q in stA): continue
@@ -95,7 +98,7 @@ def design2(chains,plan,cls,clear=6.8,grade=0.045,passes=4,verbose=False):
                 elif B==c and pr[A]<pr[B]: k,o,oj=j,A,i
                 else: continue
                 dz_=cls[o]['z'][oj]-z[k]
-                w_=min(1.0,(14-dist)/7.0)*float(np.clip(1-(abs(dz_)-3)/3,0,1))
+                w_=max(0.0,min(1.0,(14-dist)/7.0))*float(np.clip(1-(abs(dz_)-3)/3,0,1))
                 # carriageways that overlap are one roadway (the shared trunk of a ramp before it splits): same level,
                 # whatever the two profiles would do on their own
                 if dist<=hw(c,chains)+hw(o,chains) and not c.startswith(('x','e_')) and not o.startswith(('x','e_')): w_=1.0; hard[k]=True
