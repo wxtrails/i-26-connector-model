@@ -180,7 +180,8 @@ if __name__=='__main__':
                 ax.fill(*g.exterior.xy,color='#ddd')
                 for h in g.interiors: ax.fill(*h.xy,color='w')
         for d in B.plan['decks']:
-            if d['poly'].intersects(box): ax.fill(*d['poly'].exterior.xy,color='#f5c8c8',alpha=0.7)
+            if d['poly'].intersects(box):
+                for g_ in getattr(d['poly'],'geoms',[d['poly']]): ax.fill(*g_.exterior.xy,color='#f5c8c8',alpha=0.7)
         m=(B.AP[:,0]>x0)&(B.AP[:,0]<x1)&(B.AP[:,1]>y0)&(B.AP[:,1]<y1)
         ax.quiver(B.AP[m,0],B.AP[m,1],B.AD[m,0],B.AD[m,1],color='#888',scale=90,width=0.0015)
         for k,r in enumerate(out): ax.plot(r['P'][:,0],r['P'][:,1],lw=0.9,color=plt.cm.tab20(k))

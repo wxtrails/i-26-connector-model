@@ -182,14 +182,15 @@ def split_stacked(chains,plan,cls,verbose=True):
                 band=sg.LineString(cls[up]['P'][ru[0]:ru[1]+1]).buffer(hu+1.0,cap_style=2)
                 rest=polyonly(dk.difference(L.difference(band)).buffer(-0.3).buffer(0.3))
                 if L.area<40 or rest.area<40: continue
-                # the two roads are separate structures here: drop what is left of the merged outline between them
-                # (deck beside the lower road that no road runs on)
-                bands=[lines[c].buffer(hw(c,chains)+2.0,cap_style=2) for c in ids if lines[c].distance(L)<20.0]
-                gore=polyonly(rest.intersection(L.buffer(14.0)).difference(shapely.unary_union(bands+[L.buffer(0.5)])).buffer(-0.4).buffer(0.6))
-                if gore.area>20:
-                    rest2=polyonly(rest.difference(gore).buffer(-0.3).buffer(0.3))
+                # the two roads are separate structures here: drop what is left of the merged outline beside the lower
+                # road (the gore between it and its neighbours, and the slivers along its edges) wherever no other road runs
+                bands=[lines[c].buffer(hw(c,chains)+2.0,cap_style=2) for c in ids if c!=lo and lines[c].distance(L)<20.0]
+                gore=polyonly(rest.intersection(L.buffer(14.0)).difference(shapely.unary_union(bands)))
+                gore=[g for g in getattr(gore,'geoms',[gore]) if not g.is_empty and g.distance(L)<0.5]
+                if gore:
+                    rest2=polyonly(rest.difference(shapely.unary_union(gore).buffer(0.2)).buffer(-0.75).buffer(0.75))
                     if rest2.area>40:
-                        if verbose: print('  removed %.0f m2 of deck'%(rest.area-rest2.area),k,'between',up,'/ other roads and',lo)
+                        if verbose: print('  removed %.0f m2 of deck'%(rest.area-rest2.area),k,'beside',lo)
                         rest=rest2
                 decks[k]=dict(decks[k],poly=rest)
                 decks.append({'poly':L,'iso':decks[k].get('iso',False),'src':'split','abut':polyonly(decks[k]['abut'].intersection(L.buffer(6))) if not decks[k]['abut'].is_empty else sg.Polygon(),
@@ -233,6 +234,17 @@ def patch_plan(chains,plan,cls):
                 if dp.area<40: continue
                 decks.append({'poly':dp,'iso':False,'src':'patch','abut':sg.Polygon(),'width':2*h,'own':c}); st[run]=len(decks)-1; nd+=1
     if addG: G=shapely.unary_union([G]+[g for g in addG if not g.is_empty]).buffer(0)
+    # the plans draw a road's pavement fill straight through under its own bridges; no road is down there. Keep
+    # ground-level pavement beneath a deck only along roads that really pass under it at grade.
+    DU=shapely.unary_union([d['poly'] for d in decks]); keep=[]
+    for c,d in cls.items():
+        h=hw(c,chains)+3.0; idx=np.where(d['st']<0)[0]
+        for run in (np.split(idx,np.where(np.diff(idx)>1)[0]+1) if len(idx) else []):
+            if len(run)>1 and sg.LineString(d['P'][run]).distance(DU)<h: keep.append(sg.LineString(d['P'][run]).buffer(h,cap_style=2))
+    gone=polyonly(G.intersection(DU.buffer(-0.5)).difference(shapely.unary_union(keep)).buffer(-0.5).buffer(0.7))
+    if not gone.is_empty:
+        G=polyonly(G.difference(gone).buffer(-0.3).buffer(0.3)); print('removed %.0f m2 of ground-level pavement under bridges'%gone.area)
+        plan['Gunder']=gone
     plan['G']=G; print('patched: G pieces',len(addG),'deck pieces',nd)
     return plan
 def axis_of(p):
