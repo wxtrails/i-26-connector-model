@@ -48,8 +48,19 @@ def relations(chains,plan,cls,verbose=False):
                     up,lo=((A,i),(Bc,j)) if la>lb else ((Bc,j),(A,i))
                 over.append((up[0],up[1],lo[0],lo[1])); stA.append(i)
                 if verbose: print('crossing',up[0],'over',lo[0],(round(p.x),round(p.y)))
+                # a skewed crossing is long: the upper road must clear the lower one wherever the lower one is under
+                # the bridge and within the upper carriageway, not only where the centrelines meet
+                U_,iu,L_,jl=up[0],up[1],lo[0],lo[1]; su=cls[U_]['st']
+                if su[iu]>=0 and not U_.startswith(('x','e_')):
+                    ks=set(int(k) for k in su[max(0,iu-60):iu+61] if k>=0)
+                    Ud=shapely.unary_union([decks[k]['poly'] for k in ks]).buffer(0.5)
+                    a0,a1=max(0,jl-80),min(len(cls[L_]['P']),jl+81); Pl=cls[L_]['P'][a0:a1]
+                    du,ii=trees[U_].query(Pl); ins=shapely.contains(Ud,shapely.points(Pl))&(du<=hw(U_,chains)+2.0)&(su[ii]>=0)
+                    for q in np.where(ins)[0][::2]:
+                        if abs(int(ii[q])-iu)>3: over.append((U_,int(ii[q]),L_,a0+int(q)))
             dd,jj=trees[Bc].query(PA)
-            for i in np.where(dd<lim)[0]:
+            lim2=14.0 if stA else lim       # roads that cross at different levels are not one roadway nearby
+            for i in np.where(dd<lim2)[0]:
                 j=jj[i]
                 if sa[i]!=sb[j]: continue
                 if any(abs(i-q)*DS<150 for q in stA): continue
@@ -57,6 +68,7 @@ def relations(chains,plan,cls,verbose=False):
     return over,pins,par
 def design2(chains,plan,cls,clear=6.8,grade=0.045,passes=4,verbose=False):
     over,pins,par=relations(chains,plan,cls,verbose)
+    crossed=set((min(u,l),max(u,l)) for (u,i,l,j) in over)
     ids=list(chains.keys()); pr={c:(PRIO.index(c) if c in PRIO else 50+k) for k,c in enumerate(ids)}
     Gex=plan.get('Gexist'); Gb=Gex.buffer(1.0) if Gex is not None else None
     base={}; need={}; ktrees={c:cKDTree(cls[c]['P']) for c in ids}
@@ -89,7 +101,11 @@ def design2(chains,plan,cls,clear=6.8,grade=0.045,passes=4,verbose=False):
                 for di in range(-4,5):
                     q=i+di
                     if 0<=q<m: mm[q]=max(mm[q],cls[l]['z'][j]+clear)
-            z=np.maximum(base[c],envelope(mm,grade))
+            bs=base[c]
+            for (o,s0,s1,bl) in chains[c].get('follow',()):      # hand hint: run at a neighbour's level, not the hill's
+                s_=d['s']; w_=np.clip((s_-s0)/bl,0,1)*np.clip((s1-s_)/bl,0,1); w_=w_*w_*(3-2*w_)
+                jo=ktrees[o].query(d['P'])[1]; bs=bs*(1-w_)+cls[o]['z'][jo]*w_
+            z=np.maximum(bs,envelope(mm,grade))
             z=gs(z,35.0); z=np.maximum(z,mm); z=gs(z,12.0)
             # pins at same-level crossings and parallel ties toward higher-priority chains
             delta=np.zeros(m); wt=np.zeros(m); hard=np.zeros(m,bool)
@@ -101,7 +117,7 @@ def design2(chains,plan,cls,clear=6.8,grade=0.045,passes=4,verbose=False):
                 w_=max(0.0,min(1.0,(14-dist)/7.0))*float(np.clip(1-(abs(dz_)-3)/3,0,1))
                 # carriageways that overlap are one roadway (the shared trunk of a ramp before it splits): same level,
                 # whatever the two profiles would do on their own
-                if dist<=hw(c,chains)+hw(o,chains) and not c.startswith(('x','e_')) and not o.startswith(('x','e_')): w_=1.0; hard[k]=True
+                if dist<=hw(c,chains)+hw(o,chains) and not c.startswith(('x','e_')) and not o.startswith(('x','e_')) and (dist<14 or (min(c,o),max(c,o)) not in crossed): w_=1.0; hard[k]=True
                 if w_>wt[k]: wt[k]=w_; delta[k]=dz_
             if wt.any():
                 # fill delta between tied stations smoothly, decay outside
@@ -279,7 +295,12 @@ def patch_plan(chains,plan,cls):
             if under: addG.append(seg.buffer(h,cap_style=2).intersection(DU.buffer(2.0)))
             elif b-a<110: addG.append(seg.buffer(min(h,8.0),cap_style=2))
         for k in np.unique(st[st>=0]):
-            own=decks[k]['poly'].buffer(1.0); mm=(st==k)&~shapely.contains(own,pts); idx=np.where(mm)[0]
+            own=decks[k]['poly'].buffer(1.0); mm=(st==k)&~shapely.contains(own,pts)
+            if mm.any():      # ...unless the deck still carries part of the carriageway there (centreline along its edge)
+                tg=np.gradient(P,axis=0); tg/=np.hypot(tg[:,0],tg[:,1])[:,None]+1e-9; nn=np.c_[-tg[:,1],tg[:,0]]; offs=np.linspace(-h,h,23)
+                for i_ in np.where(mm)[0]:
+                    if shapely.contains(own,shapely.points(P[i_]+nn[i_]*offs[:,None])).mean()>=0.2: mm[i_]=False
+            idx=np.where(mm)[0]
             for run in (np.split(idx,np.where(np.diff(idx)>1)[0]+1) if len(idx) else []):
                 if len(run)<2: continue
                 a,b=d['s'][run[0]]-7,d['s'][run[-1]]+7; seg=so.substring(ls,max(a,0),min(b,ls.length))
@@ -360,6 +381,11 @@ def load_all():
     for c,pts in RIDE.items(): chains[c]['ride']=[deck_at(plan,p) for p in pts]
     chains['b22']['linear']=0.85
     chains['b18']['linear']=0.85     # on structure from the split to the I-240 flyover it joins: no dip into the valley
+    # north of the river bridges I-26 comes down to the level of the US 19/23 lanes beside it (cut into the Montford
+    # hillside), instead of riding over the hill: stations along b0 from the bridge end to where those lanes join it
+    chains['b0']['follow']=[('b2',3530.0,4000.0,150.0)]
+    # and the ramp from I-240 West climbs straight to I-26's level at the bridge end, without a hump over that hill
+    chains['b5']['follow']=[('b0',900.0,1300.0,80.0)]
     G=plan['G']
     for c in ('b8','b9'):
         s_,P=resample(chains[c]['xy']); z0=terr(P[:,0],P[:,1])

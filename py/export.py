@@ -52,7 +52,12 @@ def stage_roads(surf):
     SP=[];SI=[];n=0; BP=[];BI=[];bn=0
     T=np.load(W+'/terrain_conf.npy')
     from terrain import sample
-    PIER=[]
+    PIER=[]; BENT=[]; nbent=0
+    Gclear=Gp.buffer(2.0); shapely.prepare(Gclear)
+    from scipy.spatial import cKDTree
+    _cls=pickle.load(open(W+'/profiles.pkl','rb'))['cls']; riders={}
+    for c_,v_ in _cls.items():
+        for k_ in np.unique(v_['st'][v_['st']>=0]): riders.setdefault(int(k_),[]).append(v_['P'][v_['st']==k_])
     dsheets=[(i,s) for i,s in enumerate(surf.sheets) if s['kind']=='D']
     others=shapely.STRtree([s['poly'] for i,s in dsheets])
     for di,(i,s) in enumerate(dsheets):
@@ -107,9 +112,32 @@ def stage_roads(surf):
         for p_,a_,b_,g_ in zip(pp,zt,zd,gm):
             if g_ and np.isfinite(b_) and b_-a_>3.0 and all(np.hypot(*(p_-q))>26.0 for q in placed):
                 placed.append(p_); PIER.append([p_[0]-OX,a_-1.0,-(p_[1]-OY),b_-1.6-(a_-1.0)])
+        # where the bridge runs over a road there is no room for a column under it: straddle bents instead, a cap
+        # beam across the bridge on two columns standing clear of the pavement on either side
+        R_=riders.get(s['deck'])
+        if R_:
+            RP=np.vstack(R_); rt=cKDTree(RP)
+            for p_,a_,b_,g_ in zip(pp,zt,zd,gm):
+                if g_ or not np.isfinite(b_) or b_-a_<4.5 or any(np.hypot(*(p_-q))<30.0 for q in placed): continue
+                j_=rt.query(p_)[1]; ax_=RP[min(j_+1,len(RP)-1)]-RP[max(j_-1,0)]; ax_=ax_/(np.hypot(*ax_)+1e-9); nr_=np.array([-ax_[1],ax_[0]])
+                ends=[]
+                for sg_ in (-1.0,1.0):
+                    hit=[t_ for t_ in np.arange(1.0,27.0,1.0) if not shapely.contains(Gclear,sg.Point(*(p_+sg_*nr_*t_)))]
+                    ends.append(p_+sg_*nr_*hit[0] if hit else None)
+                if ends[0] is None or ends[1] is None: continue
+                span=np.hypot(*(ends[1]-ends[0]))
+                if not 6.0<=span<=46.0: continue
+                top=b_-1.7; bot=top-1.5; zc=sample(T,np.array([e[0] for e in ends]),np.array([e[1] for e in ends]))
+                if (bot-zc).min()<2.5: continue
+                placed.append(p_); nbent+=1
+                for e,zb in zip(ends,zc): PIER.append([e[0]-OX,zb-1.0,-(e[1]-OY),top-(zb-1.0)])
+                e0=ends[0]-nr_*1.4; e1=ends[1]+nr_*1.4; w_=ax_*1.0
+                c4=[e0-w_,e1-w_,e1+w_,e0+w_]
+                q=toscene([c[0] for c in c4]*2,[c[1] for c in c4]*2,[bot]*4+[top]*4)
+                SP.append(q); SI.append(np.array([[0,1,2],[0,2,3],[4,6,5],[4,7,6],[0,4,5],[0,5,1],[1,5,6],[1,6,2],[2,6,7],[2,7,3],[3,7,4],[3,4,0]])+n); n+=8
     put('deck_side_p',np.vstack(SP)); put('deck_side_i',np.vstack(SI).astype(np.uint32))
     put('deck_par_p',np.vstack(BP)); put('deck_par_i',np.vstack(BI).astype(np.uint32))
-    put('piers',np.array(PIER,np.float32)); print('piers',len(PIER))
+    put('piers',np.array(PIER,np.float32)); print('piers',len(PIER),'of which on',nbent,'straddle bents')
 def atlas_meta():
     """atlas.json, after making sure the atlas cells were cut for the current terrain tiles (cell k textures tile k).
     The fine-tile set follows the road layout, so a road change can add or drop tiles; a stale atlas then puts each
