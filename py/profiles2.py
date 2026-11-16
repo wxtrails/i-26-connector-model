@@ -275,6 +275,54 @@ def trim_spurs(plan,cls,r=6.0,verbose=True):
                 decks[k]['poly']=new
                 if verbose: print('deck',k,'filled an enclosed gap of %.0f m2 at'%hp.area,[round(v) for v in hp.centroid.coords[0]])
     return plan
+def join_decks(chains,plan,cls,g=4.0,ge=7.0,verbose=True):
+    """Close the gaps the traced outlines leave along one road's bridge:
+      * between consecutive (or side-by-side) deck pieces the road rides, up to 2g apart;
+      * between the end of a deck and the ground-level pavement the road continues on, up to 2ge apart.
+    Pavement of roads running at another level (2 m or more above or below this road there) is left out, so the deck
+    does not grow sideways toward a road it passes over. Needs the road heights, so it runs after the design."""
+    decks=plan['decks']; G=plan['G']; ids=[c for c in cls if not c.startswith(('x','e_','y'))]
+    lines={c:sg.LineString(cls[c]['P']) for c in ids}
+    def close(U,r): return polyonly(U.buffer(r,join_style=2).buffer(-r,join_style=2).difference(U.buffer(0.01)))
+    def give(k,pieces):
+        new=polyonly(shapely.unary_union([decks[k]['poly']]+[q.buffer(0.05) for q in pieces]).buffer(0))
+        if new.geom_type=='Polygon' or decks[k]['poly'].geom_type!='Polygon': decks[k]['poly']=new; return True
+        return False
+    done=set(); n1=n2=0; a1=a2=0.0
+    for c in ids:
+        st=cls[c]['st']; P=cls[c]['P']; h=hw(c,chains); ctree=cKDTree(P)
+        for i in range(1,len(st)):
+            a,b=int(st[i-1]),int(st[i])
+            if a<0 or b<0 or a==b or (min(a,b),max(a,b)) in done: continue
+            done.add((min(a,b),max(a,b)))
+            if 'split' in (decks[a].get('src'),decks[b].get('src')): continue
+            A,B=decks[a]['poly'],decks[b]['poly']
+            add=[q for q in getattr(close(shapely.unary_union([A,B]),g),'geoms',[]) if q.area>1 and q.distance(A)<0.5 and q.distance(B)<0.5]
+            if add and give(a,add): n1+=len(add); a1+=sum(q.area for q in add)
+        for k in np.unique(st[st>=0]):
+            k=int(k)
+            if decks[k].get('src')=='split': continue
+            idx=np.where(st==k)[0]; lo,hi=max(0,idx[0]-12),min(len(st)-1,idx[-1]+12)
+            if hi-lo<2: continue
+            run=sg.LineString(P[lo:hi+1]); band=run.buffer(h+1.0,cap_style=2); own=sg.LineString(P[idx[0]:idx[-1]+1]) if len(idx)>1 else None
+            under=[]
+            for o in ids:
+                if o==c or lines[o].distance(run)>h+hw(o,chains)+6.0: continue
+                Po=cls[o]['P']; jc=ctree.query(Po)[1]; off=(cls[o]['st']<0)&(np.abs(cls[o]['z']-cls[c]['z'][jc])>2.0)
+                io=np.where(off)[0]
+                for r_ in (np.split(io,np.where(np.diff(io)>1)[0]+1) if len(io) else []):
+                    if len(r_)>1: under.append(sg.LineString(Po[r_]).buffer(hw(o,chains)+4.0))
+            near=polyonly(G.intersection(band).difference(shapely.unary_union(under)) if under else G.intersection(band))
+            if near.is_empty: continue
+            K=decks[k]['poly']
+            add=[q for q in getattr(close(shapely.unary_union([K,near]),ge),'geoms',[]) if 2<q.area<1200 and q.distance(K)<0.5 and q.distance(near)<0.5]
+            add=[polyonly(q.intersection(band)) for q in add]; add=[q for q in add if not q.is_empty and q.area>2]
+            if add and give(k,add):
+                n2+=len(add); a2+=sum(q.area for q in add)
+                for q in add:
+                    if verbose and q.area>150: print('  deck',k,'(%s) extended %.0f m2 to the pavement at'%(c,q.area),[round(v) for v in q.centroid.coords[0]])
+    if verbose: print('joined decks: %d gaps between deck pieces (%.0f m2), %d gaps to the pavement at deck ends (%.0f m2)'%(n1,a1,n2,a2))
+    return plan
 def patch_plan(chains,plan,cls):
     """fill holes in pavement along alignments (under crossing bridges, at plan seams, between bridge pieces)"""
     import shapely.ops as so
@@ -447,6 +495,7 @@ if __name__=='__main__':
     plan,cls=split_stacked(chains,plan,cls)
     plan=patch_plan(chains,plan,cls); pickle.dump(plan,open(W+'/sheets_plan2.pkl','wb'))
     cls=design2(chains,plan,cls,verbose=True)
+    plan=join_decks(chains,plan,cls); pickle.dump(plan,open(W+'/sheets_plan2.pkl','wb'))
     pickle.dump({'chains':chains,'cls':cls},open(W+'/profiles.pkl','wb'))
     import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt
     show=sys.argv[1].split(',')
