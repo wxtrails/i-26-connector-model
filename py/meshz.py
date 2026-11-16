@@ -32,14 +32,16 @@ def run(planfile='/sheets_plan2.pkl'):
                 if n_in and (best is None or n_in>best[0]): best=(n_in,c)
             gl=[(cKDTree(cls[best[1]]['P']),cls[best[1]]['z'],best[1])] if best else allst
         under=shapely.contains(DU,shapely.points(P)) if key<0 else None
-        cand=gl+(allup if key<0 else []); D=np.full((len(cand),len(P)),np.inf); Zc=np.zeros((len(cand),len(P))); Mr=np.full((len(cand),len(P)),np.inf)
+        cand=gl+(allup if key<0 else []); D=np.full((len(cand),len(P)),np.inf); Zc=np.zeros((len(cand),len(P))); Mr=np.full((len(cand),len(P)),np.inf); Ed=np.full((len(cand),len(P)),np.inf)
         for gi,(tree,zz,c) in enumerate(cand):
             d,j=tree.query(P,distance_upper_bound=400.0 if key>=0 else 60.0)
             ok=np.isfinite(d)
             if key<0 and gi>=len(gl): ok&=~under
-            D[gi,ok]=d[ok]; Zc[gi,ok]=zz[j[ok]]; Mr[gi,ok]=d[ok]/hw(c,chains)
+            D[gi,ok]=d[ok]; Zc[gi,ok]=zz[j[ok]]; Mr[gi,ok]=d[ok]/hw(c,chains); Ed[gi,ok]=np.maximum(d[ok]-hw(c,chains),0.0)
         if len(cand):
-            n0=np.argmin(Mr,axis=0); dmin=D.min(axis=0); z0=Zc[n0,np.arange(len(P))]
+            # a point belongs to the road whose carriageway it lies in, else to the one whose edge is nearest (a wide
+            # road must not claim the aprons of a narrow ramp beside it just because its half-width is large)
+            n0=np.argmin(np.where(np.isfinite(Mr),Ed+0.01*Mr,np.inf),axis=0); dmin=D.min(axis=0); z0=Zc[n0,np.arange(len(P))]
             Wt=np.where(np.isfinite(D)&(np.abs(Zc-z0[None,:])<4.0),1.0/(np.where(np.isfinite(Mr),Mr,0)**2+0.05)**2,0.0)
             num=(Wt*Zc).sum(0); den=Wt.sum(0)
         else:

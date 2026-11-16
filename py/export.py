@@ -39,7 +39,13 @@ def stage_roads(surf):
         if len(tw)==0: continue
         used=np.unique(tw); remap=np.full(len(v),-1); remap[used]=np.arange(len(used))
         P.append(toscene(v[used,0],v[used,1],zz[used])); I.append(remap[tw]+n); n+=len(used)
+    gf=pickle.load(open(W+'/gapfill.pkl','rb'))       # fill between adjacent roads at different levels, and its retaining walls
+    if len(gf['wv']): P.append(toscene(gf['wv'][:,0],gf['wv'][:,1],gf['wv'][:,2])); I.append(gf['wt']+n); n+=len(gf['wv'])
     put('wall_p',np.vstack(P) if P else np.zeros((0,3),np.float32)); put('wall_i',(np.vstack(I) if I else np.zeros((0,3))).astype(np.uint32))
+    v=gf['v']; t=gf['t'].copy()
+    if len(t):
+        a_=v[t[:,0]];b_=v[t[:,1]];c_=v[t[:,2]]; cr=(b_[:,0]-a_[:,0])*(c_[:,1]-a_[:,1])-(b_[:,1]-a_[:,1])*(c_[:,0]-a_[:,0]); t[cr<0]=t[cr<0][:,::-1]
+    put('fill_p',toscene(v[:,0],v[:,1],v[:,2]) if len(v) else np.zeros((0,3),np.float32)); put('fill_i',t.astype(np.uint32))
     # deck sides + parapets + piers
     plan=pickle.load(open(W+'/sheets_plan2.pkl','rb'))
     Gp=plan['G']

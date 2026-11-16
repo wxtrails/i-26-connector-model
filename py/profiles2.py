@@ -136,7 +136,7 @@ def design2(chains,plan,cls,clear=6.8,grade=0.045,passes=4,verbose=False):
                     t=np.clip(1-np.abs(np.arange(m)-i)*DS/(40+lack/grade),0,1); z=z+lack*t*t*(3-2*t)
             d['z']=gs(z,12.0)
     return cls
-HWD={'b0':22.0,'b6':14.0,'b10':12.0,'b23':12.0,'b8':9.0,'b9':9.0,'b1':8.0,'b3':7.0,'b7':7.0,'b2':6.0,'b5':6.0}
+HWD={'b0':22.0,'b6':14.0,'b10':12.0,'b23':12.0,'b8':9.0,'b9':9.0,'b25':9.0,'b1':8.0,'b3':7.0,'b7':7.0,'b2':6.0,'b5':6.0}
 def hw(c,chains=None):
     if c in HWD: return HWD[c]
     if c.startswith('e_'): return 9.0
@@ -203,6 +203,39 @@ def polyonly(g):
     if g.geom_type in ('Polygon','MultiPolygon'): return g
     q=[x for x in getattr(g,'geoms',[]) if x.geom_type in ('Polygon','MultiPolygon')]
     return shapely.unary_union(q) if q else sg.Polygon()
+def trim_spurs(plan,cls,r=6.0,verbose=True):
+    """Bridge outlines traced from the plans sometimes carry short side tongues (wing walls, hatching, a drawn stub of
+    the structure being replaced). Cut off the parts narrower than 2r that stick out of a wide deck, unless a road that
+    rides the deck runs out along them."""
+    for k,d in enumerate(plan['decks']):
+        p=d['poly']
+        if d.get('src')!='pdf' or p.geom_type!='Polygon': continue
+        runs=[]
+        for c,v in cls.items():
+            idx=np.where(v['st']==k)[0]
+            for r_ in (np.split(idx,np.where(np.diff(idx)>1)[0]+1) if len(idx) else []):
+                if len(r_)>1: runs.append(sg.LineString(v['P'][r_]))
+        if not runs: continue
+        core=p.buffer(-r,join_style=2).buffer(r,join_style=2).intersection(p)
+        if core.area<0.6*p.area: continue
+        rl=shapely.unary_union(runs).buffer(1.0); spurs=polyonly(p.difference(core.buffer(0.05)))
+        drop=[g for g in getattr(spurs,'geoms',[spurs]) if g.area>15 and not g.intersects(rl)]
+        if not drop: continue
+        new=polyonly(p.difference(shapely.unary_union(drop).buffer(0.1)).buffer(-0.3).buffer(0.3))
+        if new.geom_type!='Polygon': new=max(new.geoms,key=lambda g:g.area)
+        if verbose: print('deck',k,'trimmed %d side tongue(s), %.0f m2'%(len(drop),p.area-new.area),'at',[round(v) for v in p.centroid.coords[0]])
+        d['poly']=new
+        # the ground-level pavement has a hole where the tongues were drawn over it: pave the carriageways of the
+        # roads passing under at grade, on and right around the tongues
+        tg=shapely.unary_union(drop).buffer(12.0); bands=[]
+        for c,v in cls.items():
+            idx=np.where(v['st']<0)[0]
+            for r_ in (np.split(idx,np.where(np.diff(idx)>1)[0]+1) if len(idx) else []):
+                if len(r_)>1 and sg.LineString(v['P'][r_]).distance(tg)<1.0: bands.append(sg.LineString(v['P'][r_]).buffer(hw(c),cap_style=2))
+        if bands:
+            patch=shapely.unary_union(bands).intersection(tg).difference(new.buffer(-0.5))
+            plan['G']=polyonly(shapely.unary_union([plan['G'],patch]).buffer(0))
+    return plan
 def patch_plan(chains,plan,cls):
     """fill holes in pavement along alignments (under crossing bridges, at plan seams, between bridge pieces)"""
     import shapely.ops as so
@@ -360,6 +393,7 @@ def load_all():
 if __name__=='__main__':
     plan,chains=load_all()
     cls=classify(chains,plan,noride={'b1','b10'},straddle=hw)
+    plan=trim_spurs(plan,cls)
     chains=add_axis_chains(chains,plan,cls); cls=classify(chains,plan,noride={'b1','b10'},straddle=hw)
     plan,cls=split_stacked(chains,plan,cls)
     plan=patch_plan(chains,plan,cls); pickle.dump(plan,open(W+'/sheets_plan2.pkl','wb'))

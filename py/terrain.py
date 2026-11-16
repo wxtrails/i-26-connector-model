@@ -54,7 +54,7 @@ def conform(surf):
         X,Y=np.meshgrid(xs,ys); z=surf.z_on(i,np.c_[X.ravel(),Y.ravel()]).reshape(X.shape)
         sub=out[r0:r1,c0:c1]; m=np.isfinite(z)&(sub>z-2.0); sub[m]=z[m]-2.0
     # deck mask for later use (e.g. shadows) not needed
-    np.save(W+'/terrain_conf.npy',out); np.save(W+'/road_dist.npy',d.astype(np.float32))
+    np.save(W+'/terrain_conf.npy',out); np.save(W+'/road_dist.npy',d.astype(np.float32)); np.save(W+'/road_z.npy',zr)
     return out,d
 def clamp_under_roads(surf,H,margin_g=0.3,margin_d=1.5):
     """Keep the rendered terrain below every road surface.
@@ -93,6 +93,8 @@ if __name__=='__main__':
     nx=int((SX1-SX0)/TILE); ny=int((SY1-SY0)/TILE)
     # fine tiles: near roads
     plan=pickle.load(open(W+'/sheets_plan2.pkl','rb'))
+    import gapfill
+    pickle.dump(gapfill.build(H,np.load(W+'/road_z.npy'),plan,SX0,SY1,RES),open(W+'/gapfill.pkl','wb'))
     allroad=shapely.unary_union([plan['G']]+[dd['poly'] for dd in plan['decks']]).buffer(130).simplify(5)
     fine=np.zeros((ny,nx),bool)
     for j in range(ny):
