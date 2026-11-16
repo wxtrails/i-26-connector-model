@@ -104,13 +104,26 @@ def stage_roads(surf):
     put('deck_side_p',np.vstack(SP)); put('deck_side_i',np.vstack(SI).astype(np.uint32))
     put('deck_par_p',np.vstack(BP)); put('deck_par_i',np.vstack(BI).astype(np.uint32))
     put('piers',np.array(PIER,np.float32)); print('piers',len(PIER))
+def atlas_meta():
+    """atlas.json, after making sure the atlas cells were cut for the current terrain tiles (cell k textures tile k).
+    The fine-tile set follows the road layout, so a road change can add or drop tiles; a stale atlas then puts each
+    texture on the wrong tile. Re-cut it from the aerial imagery when that happens (needs work/maxar)."""
+    import glob
+    cur=np.load(W+'/terrain_tiles.npz')['tiles'].tolist(); a=json.load(open(OUT+'/atlas.json'))
+    if a.get('tiles')!=cur:
+        why='was cut for a different tile list' if 'tiles' in a else 'does not record its tile list'
+        if not glob.glob(W+'/maxar/*.tif'):
+            raise SystemExit(f'texture atlas {why}; run tools/fetch_imagery.py, then rebuild (export.py re-cuts it)')
+        print('texture atlas',why,'- re-cutting from work/maxar',flush=True)
+        import imagery; imagery.atlas(); a=json.load(open(OUT+'/atlas.json'))
+    a.pop('tiles',None); return a
 def stage_extra():
     mk=pickle.load(open(W+'/marks.pkl','rb')); sc=pickle.load(open(W+'/scenery.pkl','rb'))
     put('mk_w_p',mk['white'][0]); put('mk_w_i',mk['white'][1]); put('mk_y_p',mk['yellow'][0]); put('mk_y_i',mk['yellow'][1]); put('conc_p',mk['conc'][0]); put('conc_i',mk['conc'][1])
     put('syn_w_p',sc['syn_w'][0]); put('syn_w_i',sc['syn_w'][1]); put('syn_y_p',sc['syn_y'][0]); put('syn_y_i',sc['syn_y'][1])
     for k in ('bld_xy','bld_n','bld_h','bld_t','trees','far'): put(k,sc[k])
     man['far']=sc['far_meta']; man['signs']=sc['signs']
-    man['atlas']=json.load(open(OUT+'/atlas.json'))
+    man['atlas']=atlas_meta()
     man['imgs']['base']={'file':'base.jpg'}
     for n in range(man['atlas']['n']): man['imgs'][f'atlas{n}']={'file':f'atlas{n}.jpg'}
     import routes as RT

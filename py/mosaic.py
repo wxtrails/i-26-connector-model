@@ -1,4 +1,4 @@
-import sys, glob, numpy as np, rasterio
+import os, sys, glob, numpy as np, rasterio
 from rasterio.warp import reproject, Resampling
 from rasterio.transform import from_origin
 from PIL import Image

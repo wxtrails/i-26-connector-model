@@ -26,6 +26,10 @@ def atlas():
             A[r*CELL:(r+1)*CELL,c*CELL:(c+1)*CELL]=cell
         print('block',bi,bj,len(lst),flush=True)
     for n,A in enumerate(at): Image.fromarray(A).save(W+f'/scene/atlas{n}.jpg',quality=76,optimize=True)
-    json.dump({'n':nat,'per':PER,'cell':CELL,'gut':GUT,'tile':N},open(W+'/scene/atlas.json','w'))
+    # record which terrain tile each cell belongs to, so export.py can tell when the atlas no longer matches terrain_tiles.npz
+    json.dump({'n':nat,'per':PER,'cell':CELL,'gut':GUT,'tile':N,'tiles':tiles.tolist()},open(W+'/scene/atlas.json','w'))
 if __name__=='__main__':
-    base(); atlas(); print('IMAGERY DONE')
+    what=sys.argv[1:] or ['base','atlas']      # e.g. `python imagery.py atlas` re-cuts only the atlases
+    if 'base' in what: base()
+    if 'atlas' in what: atlas()
+    print('IMAGERY DONE')
