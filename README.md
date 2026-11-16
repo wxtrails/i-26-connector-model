@@ -57,3 +57,17 @@ The `work/` data folder is not in git (about 380 MB); it is shared in the projec
 
 ## Working together
 Edits to the viewer (`web/src`) need only `python3 web/build.py` (after `export.py` has produced `work/scene` buffers). Edits to heights, bridges or grading start at `profiles2.py` and run through `run_all.sh`. `work/` and the built HTML are git-ignored; share `work/` through the project folder, a shared drive or Git LFS.
+
+## Publishing
+The source lives at https://github.com/wxtrails/i-26-connector-model (branch `main`). The built model is served by GitHub Pages from the `gh-pages` branch at https://wxtrails.github.io/i-26-connector-model/. That branch holds only `index.html` (the built `i26-connector-3d.html`) and an empty `.nojekyll`; the HTML is never committed to `main`.
+
+To publish a new build after `uv run python run_all.py`:
+```
+git fetch origin gh-pages
+git worktree add ../pages-tmp gh-pages
+cp i26-connector-3d.html ../pages-tmp/index.html
+git -C ../pages-tmp commit -am "Publish model"
+git -C ../pages-tmp push origin gh-pages
+git worktree remove ../pages-tmp
+```
+Pages is set to deploy from branch `gh-pages`, folder `/` (Settings > Pages). The site updates a minute or two after the push.
