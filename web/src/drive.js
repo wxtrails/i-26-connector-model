@@ -133,17 +133,20 @@ function applyOrbit(){
   canvas.addEventListener('wheel',e=>{e.preventDefault(); if(A.camMode!=='orbit') return; view.dist=Math.min(30000,Math.max(12,view.dist*Math.exp(e.deltaY*0.0011)));},{passive:false});
   canvas.addEventListener('contextmenu',e=>e.preventDefault());
 })();
-// keyboard pan: W/A/S/D slide the orbit centre forward/left/back/right as seen from the camera, like right-drag
-const panKeys=new Set();
+// keyboard camera, held keys act every frame: W/A/S/D slide the orbit centre forward/left/back/right as seen from the camera (like right-drag);
+// Q/E turn the view right/left around the same centre and R/F tilt it down (more overhead) / up (toward the horizon), like left-drag
+const camKeys=new Set(), CAM_KEYS=['KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','KeyR','KeyF'];
 window.addEventListener('keydown',e=>{ const t=e.target.tagName; if(t==='SELECT'||t==='INPUT'||t==='TEXTAREA'||e.ctrlKey||e.metaKey||e.altKey) return;
-  if(e.code==='KeyW'||e.code==='KeyA'||e.code==='KeyS'||e.code==='KeyD'){ panKeys.add(e.code); e.preventDefault(); } });
-window.addEventListener('keyup',e=>panKeys.delete(e.code)); window.addEventListener('blur',()=>panKeys.clear());
-function keyPan(dt){
-  if(!panKeys.size||A.camMode==='manual') return;
-  const f=(panKeys.has('KeyW')?1:0)-(panKeys.has('KeyS')?1:0), r=(panKeys.has('KeyD')?1:0)-(panKeys.has('KeyA')?1:0); if(!f&&!r) return;
+  if(CAM_KEYS.includes(e.code)){ camKeys.add(e.code); e.preventDefault(); } });
+window.addEventListener('keyup',e=>camKeys.delete(e.code)); window.addEventListener('blur',()=>camKeys.clear());
+function keyCam(dt){
+  if(!camKeys.size||A.camMode==='manual') return; const k=c=>camKeys.has(c)?1:0;
+  const f=k('KeyW')-k('KeyS'), r=k('KeyD')-k('KeyA'), turn=k('KeyQ')-k('KeyE'), tilt=k('KeyF')-k('KeyR'); if(!f&&!r&&!turn&&!tilt) return;
   if(A.camMode!=='orbit'&&A.setCamMode){ if(ego.active){view.tx=ego.pos.x;view.ty=ego.pos.y;view.tz=ego.pos.z;view.dist=Math.min(view.dist,160);} A.setCamMode('orbit'); }
-  const s=view.dist*0.6*dt/Math.hypot(f,r), c=Math.cos(view.az), sn=Math.sin(view.az); // about a third of the screen width per second at any zoom
-  view.tx+=(r*c-f*sn)*s; view.tz+=(-r*sn-f*c)*s; view.ty=terr.height(view.tx,view.tz); A.follow=false;
+  if(turn) view.az-=turn*1.05*dt; // about 60 degrees a second; Q swings the heading clockwise seen from above, as drag-right does
+  if(tilt) view.pol=Math.min(1.55,Math.max(0.06,view.pol+tilt*0.61*dt)); // about 35 degrees a second, within the left-drag limits
+  if(f||r){ const s=view.dist*0.6*dt/Math.hypot(f,r), c=Math.cos(view.az), sn=Math.sin(view.az); // about a third of the screen width per second at any zoom
+    view.tx+=(r*c-f*sn)*s; view.tz+=(-r*sn-f*c)*s; view.ty=terr.height(view.tx,view.tz); A.follow=false; }
 }
 function resize(){const w=canvas.clientWidth,h=canvas.clientHeight;renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix();}
 window.addEventListener('resize',resize); resize();
@@ -155,7 +158,7 @@ function updateEgo(dt){
   basis(ego.mesh.matrix,_p.set(_a.x,_a.y+0.03,_a.z),ego.fwd,1,1,1); ego.hood.matrix.copy(ego.mesh.matrix);
 }
 function updateCamera(dt){
-  keyPan(dt); const mode=A.camMode, r=ego.route;
+  keyCam(dt); const mode=A.camMode, r=ego.route;
   ego.mesh.visible=ego.active&&mode!=='driver'; ego.hood.visible=ego.active&&mode==='driver';
   if(mode==='orbit'||!ego.active){ if(ego.active&&A.follow){view.tx=ego.pos.x;view.ty=ego.pos.y+1;view.tz=ego.pos.z;} applyOrbit(); return; }
   const k=1-Math.exp(-dt*4.0);

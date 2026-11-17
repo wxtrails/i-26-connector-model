@@ -17,7 +17,7 @@ ui.innerHTML=`
     <div class="row checks"><label><input type="checkbox" id="ckLabels" checked> Place labels</label><label><input type="checkbox" id="ckBld" checked> Buildings</label><label><input type="checkbox" id="ckTrees" checked> Trees</label></div>
     <label class="lbl">Jump to an overview</label>
     <div class="row wrap" id="views"></div>
-    <div class="hint">Free orbit: drag to rotate, right-drag, Shift-drag or W/A/S/D to pan, scroll to zoom. Keys: Space pause, C camera, 1&ndash;4 speed.</div>
+    <div class="hint">Free orbit: drag to rotate, right-drag, Shift-drag or W/A/S/D to pan, Q/E to rotate, R/F to tilt, scroll to zoom. Keys: Space pause, C camera, 1&ndash;4 speed.</div>
     <button id="about" class="link">About this model and its data sources</button>
   </div>
 </div>
