@@ -10,11 +10,11 @@ class Picker:
     """choose the pavement sheet (ground or a given deck) for linework using the nearest parallel alignment"""
     def __init__(self,surf):
         self.surf=surf; pr=pickle.load(open(W+'/profiles.pkl','rb'))['cls']
-        P=[];T=[];S=[]
+        P=[];T=[];S=[];Z=[]
         for c,d in pr.items():
             t=np.gradient(d['P'],axis=0); t/=np.hypot(t[:,0],t[:,1])[:,None]+1e-9
-            P.append(d['P']);T.append(t);S.append(d['st'])
-        self.P=np.vstack(P); self.T=np.vstack(T); self.S=np.concatenate(S); self.tree=cKDTree(self.P)
+            P.append(d['P']);T.append(t);S.append(d['st']);Z.append(d['z'])
+        self.P=np.vstack(P); self.T=np.vstack(T); self.S=np.concatenate(S); self.Z=np.concatenate(Z); self.tree=cKDTree(self.P)
         self.gs=[i for i,s in enumerate(surf.sheets) if s['kind']=='G']
         m=surf.m; stv=np.concatenate([np.full(len(s['v']),-1 if s['kind']=='G' else s['deck']) for s in surf.sheets])
         self.vt={}
@@ -24,20 +24,24 @@ class Picker:
         self.ds={}
         for i,s in enumerate(surf.sheets):
             if s['kind']=='D': self.ds.setdefault(s['deck'],[]).append(i)
-    def status(self,p,t):
+    def near(self,p,t):
+        """(status, station index) of the alignment a line at p running along t belongs to"""
         idx=self.tree.query_ball_point(p,32.0)
         if not idx: return None
         idx=np.array(idx); d=np.hypot(*(self.P[idx]-p).T); c=np.clip(np.abs(self.T[idx]@t),0,1)
         # direction counts for more than distance: lines of a road that passes under a bridge at a shallow angle lie
         # close to the bridge's alignment but are never parallel to it (2.5 m per degree)
         k=idx[np.argmin(d+2.5*np.degrees(np.arccos(c)))]
-        return int(self.S[k])
+        return int(self.S[k]),int(k)
+    def status(self,p,t):
+        r=self.near(p,t); return None if r is None else r[0]
     def z(self,P):
         """heights for a polyline, choosing ground or deck per stretch from the nearest parallel alignment"""
         P=np.asarray(P,float)
         if len(P)<2: return self.surf.drape(P)[0]
         t=np.gradient(P,axis=0); n=np.hypot(t[:,0],t[:,1]); t=t/(n[:,None]+1e-9)
-        st=np.array([(-2 if s_ is None else s_) for s_ in (self.status(P[i],t[i]) if n[i]>1e-6 else None for i in range(len(P)))])
+        res=[self.near(P[i],t[i]) if n[i]>1e-6 else None for i in range(len(P))]
+        st=np.array([-2 if r_ is None else r_[0] for r_ in res]); zr=np.array([np.nan if r_ is None else self.Z[r_[1]] for r_ in res])
         # no flicker: stretches shorter than 3 vertices take the status of the stretch before them
         for _ in range(2):
             b=np.r_[0,np.where(np.diff(st)!=0)[0]+1,len(st)]
@@ -46,10 +50,10 @@ class Picker:
         z=np.full(len(P),np.nan); b=np.r_[0,np.where(np.diff(st)!=0)[0]+1,len(st)]
         for a_,b_ in zip(b[:-1],b[1:]):
             lo,hi=max(0,a_-1),min(len(P),b_+1)     # overlap one vertex so the pieces join
-            zz=self._z(P[lo:hi],None if st[a_]==-2 else int(st[a_]))
+            zz=self._z(P[lo:hi],None if st[a_]==-2 else int(st[a_]),zr[lo:hi])
             seg=z[lo:hi]; m=np.isnan(seg); seg[m]=zz[m]; z[lo:hi]=seg
         return z
-    def _z(self,P,st):
+    def _z(self,P,st,zr=None):
         if len(P)<2: return self.surf.drape(P)[0]
         cand=self.surf.cands(P); order=[]
         if st is not None:
@@ -62,7 +66,13 @@ class Picker:
             mm=np.isnan(z); d,j=self.vt[st][0].query(P[mm],distance_upper_bound=7.0); ok=np.isfinite(d)
             idx=np.where(mm)[0][ok]; z[idx]=self.vt[st][1][j[ok]]
         if np.isnan(z).any():
-            z2,_=self.surf.drape(P); mm=np.isnan(z); z[mm]=z2[mm]
+            z2,_=self.surf.drape(P); mm=np.isnan(z)
+            if st is not None and st<0 and zr is not None:
+                # a ground-level road's line with no ground pavement under it (a barrier along the edge of a road that
+                # passes under a bridge, where the plan's pavement stops short of it): when the only surface there is
+                # the deck overhead, it stays at the height of the road it runs along
+                off=mm&np.isfinite(z2)&np.isfinite(zr)&(z2>np.nan_to_num(zr)+2.5); z[off]=zr[off]; mm&=~off
+            z[mm]=z2[mm]
         if np.isnan(z).any():
             mm=np.isnan(z); d,j=self.vall[0].query(P[mm],distance_upper_bound=7.0); ok=np.isfinite(d)
             idx=np.where(mm)[0][ok]; z[idx]=self.vall[1][j[ok]]
