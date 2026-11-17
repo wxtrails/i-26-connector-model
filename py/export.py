@@ -52,7 +52,7 @@ def stage_roads(surf):
     SP=[];SI=[];n=0; BP=[];BI=[];bn=0
     T=np.load(W+'/terrain_conf.npy')
     from terrain import sample
-    PIER=[]; BENT=[]; nbent=0
+    PIER=[]; BENT=[]; nbent=0; nopen=0
     Gclear=Gp.buffer(2.0); shapely.prepare(Gclear)
     from scipy.spatial import cKDTree
     _cls=pickle.load(open(W+'/profiles.pkl','rb'))['cls']; riders={}
@@ -82,6 +82,19 @@ def stage_roads(surf):
             mp=shapely.points(mid)
             open_=shapely.contains(ab,mp) if not ab.is_empty else np.zeros(len(mid),bool)
             if not nbu.is_empty: open_|=shapely.contains(nbu,mp)
+            # no barrier where the deck carries straight on: another deck or ground-level pavement just outside this
+            # edge at the same level (a joint between two pieces of one bridge, or the end of the bridge)
+            dv=pts[1:]-pts[:-1]; ln=np.hypot(dv[:,0],dv[:,1])+1e-9; nv=np.c_[-dv[:,1],dv[:,0]]/ln[:,None]
+            ins=shapely.contains(poly,shapely.points(mid+nv*0.6)); nv[~ins]*=-1          # nv points into the deck
+            zm=(zz[:-1]+zz[1:])/2; cont=np.zeros(len(mid),bool)
+            for off_ in (1.0,2.2):
+                Q=mid-nv*off_
+                for i2 in surf.cands(Q):
+                    if i2==i: continue
+                    z2=surf.z_on(i2,Q); cont|=np.isfinite(z2)&(np.abs(z2-zm)<1.0)
+            # (single stray panels are not joins: need two in a row)
+            cont&=(np.r_[cont[1:],cont[:1]]|np.r_[cont[-1:],cont[:-1]])
+            nopen+=int((cont&~open_).sum()); open_|=cont
             for k in range(len(pts)-1):
                 a,b=pts[k],pts[k+1]; za,zb=zz[k],zz[k+1]
                 # side skirt (always)
@@ -137,7 +150,7 @@ def stage_roads(surf):
                 SP.append(q); SI.append(np.array([[0,1,2],[0,2,3],[4,6,5],[4,7,6],[0,4,5],[0,5,1],[1,5,6],[1,6,2],[2,6,7],[2,7,3],[3,7,4],[3,4,0]])+n); n+=8
     put('deck_side_p',np.vstack(SP)); put('deck_side_i',np.vstack(SI).astype(np.uint32))
     put('deck_par_p',np.vstack(BP)); put('deck_par_i',np.vstack(BI).astype(np.uint32))
-    put('piers',np.array(PIER,np.float32)); print('piers',len(PIER),'of which on',nbent,'straddle bents')
+    put('piers',np.array(PIER,np.float32)); print('piers',len(PIER),'of which on',nbent,'straddle bents;','barrier panels left out at joins',nopen)
 def atlas_meta():
     """atlas.json, after making sure the atlas cells were cut for the current terrain tiles (cell k textures tile k).
     The fine-tile set follows the road layout, so a road change can add or drop tiles; a stale atlas then puts each
