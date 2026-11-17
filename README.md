@@ -71,3 +71,16 @@ git -C ../pages-tmp push origin gh-pages
 git worktree remove ../pages-tmp
 ```
 Pages is set to deploy from branch `gh-pages`, folder `/` (Settings > Pages). The site updates a minute or two after the push.
+
+## License
+Everything written for this project (the code, scripts and docs in this repository) is released into the public domain under [the Unlicense](LICENSE). Copy, change, sell or reuse any of it, for any purpose, without asking or giving credit.
+
+Third-party material keeps its own terms:
+- **three.js r160** (`web/package/`, also inlined into the built HTML): MIT License, © three.js authors. Keep `web/package/LICENSE` with copies of those files; the `@license` header in `three.min.js` carries the notice into the built page.
+- **Data in the built model** (the published site and any `i26-connector-3d.html`; none of it is stored in this repository):
+  - **Aerial imagery:** Maxar Open Data Program, © Maxar, **CC BY-NC 4.0**. Credit is required and commercial use is not allowed. This is the only non-commercial piece; to reuse the built model commercially, swap in public-domain imagery such as USDA NAIP and rebuild.
+  - **Buildings, streets, water and business names:** Overture Maps Foundation, release 2026-10-21.0. Buildings, streets and water are ODbL (© OpenStreetMap contributors); places are CDLA Permissive 2.0. Credit "© OpenStreetMap contributors, Overture Maps Foundation". Per-theme terms: https://docs.overturemaps.org/attribution/
+  - **Terrain:** Mapzen/AWS Terrain Tiles, from USGS 3DEP elevation data (public domain).
+  - **Road layout:** traced from NCDOT's public documents for project I-2513 (the 2018 design KMZ and the public-meeting maps). This is an unofficial model that NCDOT did not make or review. NCDOT's own disclaimer on those documents applies: they are for reference only, and the design is preliminary and subject to change.
+
+The viewer's "About this model and its data sources" panel shows these credits, so any copy of the built page carries them.
