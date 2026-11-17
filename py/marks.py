@@ -128,12 +128,37 @@ def simp(a,tol=0.06):
 def build(surf=None):
     surf=surf or Surf(); pk=Picker(surf)
     L=pickle.load(open(W+'/pdf_layers.pkl','rb')); K=pickle.load(open(W+'/kmz_sp.pkl','rb'))
-    white=Strips(); conc=Strips()
+    white=Strips(); conc=Strips(); yellow=Strips()
+    def dashes(a,z,period=12.0,on=3.0):
+        # 10 ft dashes, 30 ft gaps
+        s=np.r_[0,np.cumsum(np.hypot(*np.diff(a,axis=0).T))]
+        for s0 in np.arange(0,s[-1]-on,period):
+            ss=np.linspace(s0,s0+on,3); q=np.c_[np.interp(ss,s,a[:,0]),np.interp(ss,s,a[:,1])]; white.add(q,np.interp(ss,s,z),0.15)
+    def double(a,z):
+        t=np.gradient(a,axis=0); t/=np.hypot(t[:,0],t[:,1])[:,None]+1e-9; nr=np.c_[-t[:,1],t[:,0]]
+        for o in (-0.13,0.13): yellow.add(a+nr*o,z,0.12)
+    def runs(lab):
+        b=np.r_[0,np.where(lab[1:]!=lab[:-1])[0]+1,len(lab)]
+        return [(lab[i0],max(0,i0-1) if i0>0 else 0,i1) for i0,i1 in zip(b[:-1],b[1:])]
+    # US markings (paint.py): dashed white between lanes running the same way, double yellow between opposite ones,
+    # solid yellow on the left edge of each one-way roadway, solid white on the right edge
+    import paint as PT
+    from profiles2 import hw
+    prf=pickle.load(open(W+'/profiles.pkl','rb')); AR=pickle.load(open(W+'/arrows.pkl','rb')); AR=np.vstack([AR['pdf'][:,:4],AR['kmz'][:,:4]])
+    TR=PT.Traffic(prf['cls'],prf['chains'],hw,AR)
     ll=dedupe(lines_of(L,('Prop Lane Lines','s'))); print('lane lines',len(ll))
-    for a in ll:
-        a=densify(simp(a),8.0); white.add(a,pk.z(a),0.15)
     eot=dedupe(lines_of(L,('Prop EOT','s')))+[a for a in K['EOT'] if a[:,1].mean()<208250]
-    # chain EOT pieces coarsely: just draw each piece
+    lanes=[densify(simp(a,0.05),4.0) for a in PT.chain_lines(ll)]
+    edges=[densify(simp(a,0.05),4.0) for a in PT.chain_lines([a for a in eot if np.hypot(*np.diff(a,axis=0).T).sum()>=0.5])]
+    rl,re=PT.roles(lanes,edges,TR,AR); rl=[PT.smooth(x) for x in rl]; re=[PT.smooth(x) for x in re]
+    nd=ny=0
+    for a,lab in zip(lanes,rl):
+        for kd,i0,i1 in runs(lab):
+            q=a[i0:i1]
+            if len(q)<2: continue
+            if kd=='dyel': double(q,pk.z(q)); ny+=1
+            else: q=densify(q,2.0); dashes(q,pk.z(q)); nd+=1
+    print('lane lines dashed',nd,'double yellow',ny)
     # an edge line with pavement on both sides is a plan match line drawn across a road that continues: skip those parts
     Gf=pickle.load(open(W+'/sheets_plan2.pkl','rb'))['G']; shapely.prepare(Gf)
     def open_edge(a):
@@ -141,16 +166,27 @@ def build(surf=None):
         both=shapely.contains(Gf,shapely.points(a+nr*1.5))&shapely.contains(Gf,shapely.points(a-nr*1.5))
         _,j=pk.tree.query(a); across=np.abs(np.sum(pk.T[j]*t,axis=1))<0.5      # runs across the nearest alignment
         return ~(both&across)
-    n=0; ncut=0
-    for a in eot:
-        if np.hypot(*np.diff(a,axis=0).T).sum()<0.5: continue
-        a=densify(simp(a,0.08),2.0); keep=open_edge(a); z=pk.z(a)
+    n=0; ncut=0; nyl=0
+    for a,lab in zip(edges,re):
+        a2=densify(a,2.0); j=np.clip(np.searchsorted(np.r_[0,np.cumsum(np.hypot(*np.diff(a,axis=0).T))],np.r_[0,np.cumsum(np.hypot(*np.diff(a2,axis=0).T))],side='right')-1,0,len(a)-1)
+        lab2=lab[j]; keep=open_edge(a2)
         if not keep.all(): ncut+=1
         idx=np.where(keep)[0]
         for r in (np.split(idx,np.where(np.diff(idx)>1)[0]+1) if len(idx) else []):
             if len(r)<2: continue
-            b=densify(simp(a[r],0.08),8.0); white.add(b,pk.z(b),0.15); n+=1
-    print('eot',n,'edge lines trimmed where the road continues',ncut)
+            for kd,i0,i1 in runs(lab2[r]):
+                q=a2[r][i0:i1]
+                if len(q)<2: continue
+                b=densify(simp(q,0.08),8.0)
+                if kd=='yellow': yellow.add(b,pk.z(b),0.15); nyl+=1
+                else: white.add(b,pk.z(b),0.15)
+                n+=1
+    print('eot',n,'of which yellow',nyl,'edge lines trimmed where the road continues',ncut)
+    pave=shapely.unary_union([Gf]+[d['poly'] for d in pickle.load(open(W+'/sheets_plan2.pkl','rb'))['decks']])
+    cl=PT.centre_lines(prf['cls'],prf['chains'],hw,TR,PT.Lines(lanes,edges),pave)
+    for a in cl:
+        a=densify(simp(a,0.05),4.0); double(a,pk.z(a))
+    print('centre lines added',len(cl),'(%.0f m)'%sum(np.hypot(*np.diff(a,axis=0).T).sum() for a in cl))
     for a in dedupe(lines_of(L,('Prop Paint Stripe','s'))):
         a=densify(simp(a),8.0); white.add(a,pk.z(a),0.2)
     nb=0
@@ -165,11 +201,7 @@ def build(surf=None):
     print('barrier lines',nb)
     # lanes carried past the plan limits (lanes_ext.py)
     import lanes_ext as LE
-    yellow=Strips(); T=pickle.load(open(W+'/lanes_ext.pkl','rb')) if os.path.exists(W+'/lanes_ext.pkl') else {}
-    def dashes(a,z,period=12.0,on=3.0):
-        s=np.r_[0,np.cumsum(np.hypot(*np.diff(a,axis=0).T))]
-        for s0 in np.arange(0,s[-1]-on,period):
-            ss=np.linspace(s0,s0+on,3); q=np.c_[np.interp(ss,s,a[:,0]),np.interp(ss,s,a[:,1])]; white.add(q,np.interp(ss,s,z),0.15)
+    T=pickle.load(open(W+'/lanes_ext.pkl','rb')) if os.path.exists(W+'/lanes_ext.pkl') else {}
     nt=0
     for a,kd in LE.paint(T):
         a=densify(simp(a,0.05),4.0); z=pk.z(a); nt+=1
