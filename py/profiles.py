@@ -50,6 +50,15 @@ def continue_runs(cid,s,P,st,decks,dpoly,h,ext=150.0):
     for r in runs(st!=before):
         print('continued',cid,'on deck',sorted(set(int(k) for k in st[r])),'%.0f m'%(s[r[-1]]-s[r[0]]+DS),'at',P[r[0]].round(),P[r[-1]].round())
     return st
+def lands(decks,ka,pa,kb,pb,r=8.0):
+    """The road comes off one bridge and onto another a short way on, and the plans draw an abutment at both of those
+    bridge ends: the road lands on the ground in between (I-26 and both I-240 ramps on the hill between Emma Road and
+    the French Broad). A gap with no abutment at one side is a break in the traced outline, and the bridge goes on."""
+    if ka==kb: return False
+    for k,p in ((ka,pa),(kb,pb)):
+        a=decks[k].get('abut')
+        if a is None or a.is_empty or a.distance(sg.Point(*p))>r: return False
+    return True
 def classify(chains,plan,noride=(),straddle=None):
     """chains: dict id -> dict(xy=Nx2, kind) ; returns per chain s, P, status(-1 at grade / deck index)"""
     decks=plan['decks']; out={}
@@ -77,13 +86,16 @@ def classify(chains,plan,noride=(),straddle=None):
         # stay on the structure a road is already on (see continue_runs)
         if cid not in noride and straddle is not None and not cid.startswith(('x','e_')):
             st=continue_runs(cid,s,P,st,decks,dpoly,straddle(cid,chains))
-        # fill short at-grade gaps between deck runs
+        # fill short at-grade gaps between deck runs, except where the plans end both bridges at the gap (see lands)
         i=0
         while i<len(s):
             if st[i]<0:
                 j=i
                 while j+1<len(s) and st[j+1]<0: j+=1
-                if i>0 and j<len(s)-1 and (s[j]-s[i])<60: st[i:j+1]=st[i-1]
+                if i>0 and j<len(s)-1 and (s[j]-s[i])<60:
+                    if lands(decks,st[i-1],P[i-1],st[j+1],P[j+1]):
+                        print('lands',cid,'at grade for %.0f m between decks %d and %d at'%(s[j]-s[i]+DS,st[i-1],st[j+1]),P[(i+j)//2].round())
+                    else: st[i:j+1]=st[i-1]
                 i=j+1
             else: i+=1
         out[cid]={'s':s,'P':P,'st':st}

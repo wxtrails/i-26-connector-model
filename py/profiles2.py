@@ -99,6 +99,11 @@ def design2(chains,plan,cls,clear=6.8,grade=0.045,passes=4,verbose=False):
         for e in ends: nd=np.minimum(nd,np.abs(idx-e)*DS)
         zs=gs(z0,40.0)
         need[c]=np.where(dk,np.minimum(z0,zs+1.0)+np.clip(0.06*(nd-10.0),0,ch.get('deckclear',5.5)),-1e9)
+        # a road that lands on the ground for a short way between two bridges (profiles.lands) rests on that ground:
+        # the crest it lands on, not the valleys either side that the smoothed terrain would average in
+        ag=np.where(~dk)[0]
+        for r in (np.split(ag,np.where(np.diff(ag)>1)[0]+1) if len(ag) else []):
+            if r[0]>0 and r[-1]<m-1 and len(r)*DS<=60: need[c][r]=z0[r]
         if ch.get('deckclear',0)>20:   # existing bridge: straight chord between abutments
             k=np.where(dk)[0]; a,b=k[0],k[-1]; need[c][dk]=np.interp(k,[a,b],[base[c][a],base[c][b]])
         d['z']=base[c].copy()
