@@ -391,6 +391,50 @@ def span_gap(c,P,st,run,k,decks,h,verbose=True):
         st[r0:r1+1]=len(decks)-1; added=piece.area; k=len(decks)-1
     if verbose: print('bridge',c,'carried across a %.0f m gap between decks %d and %d (deck %d, +%.0f m2) at'%((r1-r0+2)*DS,ka,kb,k,added),P[(r0+r1)//2].round())
     return True
+def fill_notches(chains,plan,cls,win=5,verbose=True):
+    """Bridge outlines traced from the plans are notched where the surface roads underneath are drawn across the
+    structure fill (the I-240 West to I-26 South flyover over the US 19/23 and Riverside Drive lanes): along a road's
+    run on a deck, the deck's edge dips in and comes back out. Close those dips: at each station the deck reaches at
+    least as far out as the lower of the widest sections within win stations (25 m) before and after it, but no
+    further than the road's own carriageway (+1.5 m), and never into another deck. Tapers and deck ends, where the
+    edge moves one way only, are left as drawn."""
+    decks=plan['decks']; n=0; tot=0.0
+    def close(a):
+        m=len(a); l=np.array([np.nanmax(a[max(0,i-win):i+1]) for i in range(m)]); r=np.array([np.nanmax(a[i:i+win+1]) for i in range(m)])
+        return np.minimum(l,r)
+    for c,v in cls.items():
+        if c.startswith(('x','e_','y')): continue
+        st=v['st']; P=v['P']; h=hw(c,chains)+1.5
+        t=np.gradient(P,axis=0); t/=np.hypot(t[:,0],t[:,1])[:,None]+1e-9; nv=np.c_[-t[:,1],t[:,0]]
+        for k in np.unique(st[st>=0]):
+            k=int(k); idx=np.where(st==k)[0]
+            for run in np.split(idx,np.where(np.diff(idx)>1)[0]+1):
+                if len(run)<win: continue
+                D=decks[k]['poly']; E=[lateral(D,P[i],nv[i],h+10.0) for i in run]
+                if sum(e is None for e in E)>len(E)//3: continue
+                lo=np.array([np.nan if e is None else max(-e[0],0.0) for e in E]); hi=np.array([np.nan if e is None else max(e[1],0.0) for e in E])
+                if np.isnan(lo).all(): continue
+                lo2=np.fmax(lo,np.minimum(close(lo),h)); hi2=np.fmax(hi,np.minimum(close(hi),h))
+                ok=np.isfinite(lo2)&np.isfinite(hi2)
+                dip=ok&(np.nan_to_num(np.maximum(lo2-lo,hi2-hi),nan=0.0)>0.4)
+                if not dip.any(): continue
+                others=shapely.unary_union([d['poly'] for j,d in enumerate(decks) if j!=k]).buffer(0.3)
+                add=[]
+                dq=np.where(dip)[0]
+                for g_ in np.split(dq,np.where(np.diff(dq)>2)[0]+1):      # each notch: its stations and one either side
+                    q=np.arange(max(0,g_[0]-1),min(len(run),g_[-1]+2)); q=q[ok[q]]
+                    if len(q)<2: continue
+                    i_=run[q]
+                    band=sg.Polygon(np.vstack([P[i_]-nv[i_]*lo2[q][:,None],(P[i_]+nv[i_]*hi2[q][:,None])[::-1]])).buffer(0)
+                    a_=polyonly(band.difference(D.buffer(0.05)).difference(others))
+                    add+=[g for g in getattr(a_,'geoms',[a_]) if not g.is_empty and g.area>2.0 and g.distance(D)<0.2]
+                if not add: continue
+                new=polyonly(shapely.unary_union([D]+[g.buffer(0.05) for g in add]).buffer(0.05,join_style=2).buffer(-0.05,join_style=2))
+                if new.geom_type!='Polygon': continue
+                a=new.area-D.area; decks[k]=dict(decks[k],poly=new); n+=len(add); tot+=a
+                if verbose: print('  deck',k,'(%s) %d notch(es) filled, +%.0f m2 at'%(c,len(add),a),P[run[dip]].mean(0).round())
+    if verbose: print('notches filled: %d (%.0f m2)'%(n,tot))
+    return plan
 def patch_plan(chains,plan,cls):
     """fill holes in pavement along alignments (under crossing bridges, at plan seams, between bridge pieces)"""
     import shapely.ops as so
@@ -564,7 +608,7 @@ if __name__=='__main__':
     plan,cls=split_stacked(chains,plan,cls)
     plan=patch_plan(chains,plan,cls); pickle.dump(plan,open(W+'/sheets_plan2.pkl','wb'))
     cls=design2(chains,plan,cls,verbose=True)
-    plan=join_decks(chains,plan,cls); pickle.dump(plan,open(W+'/sheets_plan2.pkl','wb'))
+    plan=join_decks(chains,plan,cls); plan=fill_notches(chains,plan,cls); pickle.dump(plan,open(W+'/sheets_plan2.pkl','wb'))
     pickle.dump({'chains':chains,'cls':cls},open(W+'/profiles.pkl','wb'))
     import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt
     show=sys.argv[1].split(',')
