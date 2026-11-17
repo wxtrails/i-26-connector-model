@@ -14,7 +14,7 @@ Builds `i26-connector-3d.html`, a single self-contained page (about 32 MB) that 
 | `web/src/` | viewer: `core.js` (sky, terrain, roads, bridges), `scenery.js` (buildings, storefronts, trees), `drive.js` (routes, traffic, cameras), `ui.js` (panel, HUD, labels), `style.css`, `index.html` |
 | `web/build.py` | inlines everything into `i26-connector-3d.html` |
 | `work/` | cached inputs and intermediates (about 280 MB, see below) |
-| `run_all.py` | rebuild from `work/` (`uv run python run_all.py`; `run_all.sh` is a wrapper) |
+| `run_all.py` | rebuild from `work/` (`uv run python run_all.py`; `run_all.sh` is a wrapper); also refreshes `serve/index.html` when a local `serve/` folder exists |
 | `tools/fetch_imagery.py` | downloads the aerial GeoTIFFs into `work/maxar` (about 524 MB) |
 
 Paths are relative, so the folder can live anywhere. Set `I26_WORK=/path` to use a different data folder.
