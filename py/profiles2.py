@@ -36,6 +36,21 @@ def relations(chains,plan,cls,verbose=False):
                     up,lo=((A,i),(Bc,j)) if (A,Bc) in stack else ((Bc,j),(A,i))
                     over.append((up[0],up[1],lo[0],lo[1])); stA.append(i)
                     if verbose: print('crossing',up[0],'over',lo[0],(round(p.x),round(p.y)),'(stacked)')
+                    # the upper bridge must clear the lower deck over the whole patch where the two overlap, not only
+                    # where the centrelines meet: a wide lower deck crossed at a skew is under the upper one for a long
+                    # way, and its far side sits at the height of the lower road some way up or down its grade
+                    U_,iu,L_,jl=up[0],up[1],lo[0],lo[1]
+                    ku=set(int(k) for k in cls[U_]['st'][max(0,iu-60):iu+61] if k>=0)
+                    kl=set(int(k) for k in cls[L_]['st'][max(0,jl-60):jl+61] if k>=0)-ku
+                    if ku and kl:
+                        ov=shapely.unary_union([decks[k]['poly'] for k in ku]).intersection(shapely.unary_union([decks[k]['poly'] for k in kl]))
+                        if not ov.is_empty:
+                            x0,y0,x1,y1=ov.bounds; gx,gy=np.meshgrid(np.arange(x0,x1,3.0),np.arange(y0,y1,3.0)); Q=np.c_[gx.ravel(),gy.ravel()]
+                            Q=Q[shapely.contains(ov,shapely.points(Q))]
+                            if len(Q):
+                                prs=set(zip(trees[U_].query(Q)[1].tolist(),trees[L_].query(Q)[1].tolist()))
+                                for (qu,ql) in sorted(prs): over.append((U_,int(qu),L_,int(ql)))
+                                if verbose: print('  clearance held over %.0f m2 where the decks overlap (%d station pairs)'%(ov.area,len(prs)))
                     continue
                 if ka==kb: pins.append((A,i,Bc,j)); continue
                 if ka>=0 and kb<0: up,lo=(A,i),(Bc,j)
@@ -323,6 +338,59 @@ def join_decks(chains,plan,cls,g=4.0,ge=7.0,verbose=True):
                     if verbose and q.area>150: print('  deck',k,'(%s) extended %.0f m2 to the pavement at'%(c,q.area),[round(v) for v in q.centroid.coords[0]])
     if verbose: print('joined decks: %d gaps between deck pieces (%.0f m2), %d gaps to the pavement at deck ends (%.0f m2)'%(n1,a1,n2,a2))
     return plan
+def lateral(D,p,nv,W,step=0.5):
+    """extent of deck D across a road at one station: offsets (lo,hi) along the normal nv of the stretch of the
+    cross-section inside D that holds the centreline (or comes nearest to it); None if the section misses D"""
+    o=np.arange(-W,W+step/2,step); ins=shapely.contains(D,shapely.points(p+nv*o[:,None]))
+    if not ins.any(): return None
+    idx=np.where(ins)[0]; rs=np.split(idx,np.where(np.diff(idx)>1)[0]+1)
+    r=min(rs,key=lambda r:0.0 if o[r[0]]<=0<=o[r[-1]] else min(abs(o[r[0]]),abs(o[r[-1]])))
+    return float(o[r[0]]),float(o[r[-1]])
+def span_gap(c,P,st,run,k,decks,h,verbose=True):
+    """A road's bridge drawn in two pieces with a gap between them: the plans draw only the top structure where another
+    bridge passes over (the I-240 West to I-26 South flyover over the I-26 river bridges), and traced fills sometimes
+    stop short of each other. Carry the deck across the gap at the width it has on either side, following the road's
+    curve: from the last full-width section before the gap to the first one after it, edges interpolated between the
+    two. The fill joins the deck the road is assigned to there. Returns False when the road is not on a bridge on
+    both sides of the gap (the caller then patches the gap along the carriageway instead)."""
+    r0,r1=int(run[0]),int(run[-1]); n=len(P)
+    if r0<1 or r1>n-2 or st[r0-1]<0 or st[r1+1]<0: return False
+    ka,kb=int(st[r0-1]),int(st[r1+1]); A,B=decks[ka]['poly'],decks[kb]['poly']
+    t=np.gradient(P,axis=0); t/=np.hypot(t[:,0],t[:,1])[:,None]+1e-9; nv=np.c_[-t[:,1],t[:,0]]; W=h+15.0
+    def full(D,steps):
+        # walk away from the gap until the deck's section stops changing: nearer stations are cut by the skewed end
+        prev=None
+        for i in steps:
+            if not 0<=i<n: break
+            e=lateral(D,P[i],nv[i],W)
+            if e is None: prev=None; continue
+            if prev is not None and abs(e[0]-prev[1][0])<0.6 and abs(e[1]-prev[1][1])<0.6: return prev
+            prev=(i,e)
+        return None
+    fa=full(A,range(r0-1,r0-25,-1)); fb=full(B,range(r1+1,r1+25))
+    if fa is None or fb is None: return False
+    (ia,ea),(ib,eb)=fa,fb
+    q=np.arange(ia,ib+1); u=(q-ia)/max(ib-ia,1)
+    lo=ea[0]+(eb[0]-ea[0])*u; hi=ea[1]+(eb[1]-ea[1])*u
+    fill=sg.Polygon(np.vstack([P[q]+nv[q]*lo[:,None],(P[q]+nv[q]*hi[:,None])[::-1]])).buffer(0)
+    if fill.is_empty: return False
+    if k==ka: new=shapely.unary_union([A,fill.difference(B.buffer(0.05)) if kb!=ka else fill])
+    elif k==kb: new=shapely.unary_union([B,fill.difference(A.buffer(0.05))])
+    else: new=None
+    if new is not None:
+        new=polyonly(new.buffer(0.05,join_style=2).buffer(-0.05,join_style=2))
+        if new.geom_type!='Polygon': new=None
+    if new is not None:
+        added=new.area-decks[k]['poly'].area; decks[k]=dict(decks[k],poly=new)
+    else:      # the road rides some other deck here: the fill is a deck of its own
+        piece=polyonly(fill.difference(shapely.unary_union([A,B]).buffer(0.05)).buffer(-0.3).buffer(0.3))
+        if piece.geom_type!='Polygon':
+            if piece.is_empty: return False
+            piece=max(piece.geoms,key=lambda g:g.area)
+        decks.append({'poly':piece,'iso':decks[ka].get('iso',False),'src':'patch','abut':sg.Polygon(),'width':2*h,'own':c})
+        st[r0:r1+1]=len(decks)-1; added=piece.area; k=len(decks)-1
+    if verbose: print('bridge',c,'carried across a %.0f m gap between decks %d and %d (deck %d, +%.0f m2) at'%((r1-r0+2)*DS,ka,kb,k,added),P[(r0+r1)//2].round())
+    return True
 def patch_plan(chains,plan,cls):
     """fill holes in pavement along alignments (under crossing bridges, at plan seams, between bridge pieces)"""
     import shapely.ops as so
@@ -351,6 +419,7 @@ def patch_plan(chains,plan,cls):
             idx=np.where(mm)[0]
             for run in (np.split(idx,np.where(np.diff(idx)>1)[0]+1) if len(idx) else []):
                 if len(run)<2: continue
+                if span_gap(c,P,st,run,k,decks,h): continue
                 a,b=d['s'][run[0]]-7,d['s'][run[-1]]+7; seg=so.substring(ls,max(a,0),min(b,ls.length))
                 dp=seg.buffer(h,cap_style=2).difference(shapely.unary_union([dd['poly'] for dd in decks if not dd.get('iso')]).buffer(0.05))
                 dp=dp.buffer(-0.5).buffer(0.5)

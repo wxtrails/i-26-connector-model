@@ -11,8 +11,19 @@ def run(planfile='/sheets_plan2.pkl'):
     zt=M.terr(XY[:,0],XY[:,1]); z=zt.copy()
     groups={}
     for c,d in cls.items():
-        for k in np.unique(d['st']):
-            m=d['st']==k; groups.setdefault(int(k),[]).append((cKDTree(d['P'][m]),d['z'][m],c))
+        st=d['st']; on=st>=0
+        for k in np.unique(st):
+            m=st==k
+            if k>=0:
+                # a road's run on this deck, plus the stations either side where it carries on along the next deck
+                # (up to 60 m): where two pieces of one bridge meet at a skewed joint, both sides then take the height
+                # of the station they are actually beside, not the end of their own run, and the joint stays level
+                idx=np.where(m)[0]; ext=m.copy()
+                for i0,step in ((idx[0],-1),(idx[-1],1)):
+                    i=i0+step
+                    while 0<=i<len(st) and on[i] and abs(i-i0)<=12: ext[i]=True; i+=step
+                m=ext
+            groups.setdefault(int(k),[]).append((cKDTree(d['P'][m]),d['z'][m],c))
     from profiles2 import hw
     chains=pr['chains']
     allst=[(cKDTree(d['P']),d['z'],c) for c,d in cls.items()]
