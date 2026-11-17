@@ -320,13 +320,13 @@ def join_decks(chains,plan,cls,g=4.0,ge=7.0,verbose=True):
             a,b=int(st[i-1]),int(st[i])
             if a<0 or b<0 or a==b or (min(a,b),max(a,b)) in done: continue
             done.add((min(a,b),max(a,b)))
-            if 'split' in (decks[a].get('src'),decks[b].get('src')): continue
+            if 'split' in (decks[a].get('src'),decks[b].get('src')) or decks[a].get('drawn') or decks[b].get('drawn'): continue
             A,B=decks[a]['poly'],decks[b]['poly']
             add=[q for q in getattr(close(shapely.unary_union([A,B]),g),'geoms',[]) if q.area>1 and q.distance(A)<0.5 and q.distance(B)<0.5]
             if add and give(a,add): n1+=len(add); a1+=sum(q.area for q in add)
         for k in np.unique(st[st>=0]):
             k=int(k)
-            if decks[k].get('src')=='split': continue
+            if decks[k].get('src')=='split' or decks[k].get('drawn'): continue
             idx=np.where(st==k)[0]; lo,hi=max(0,idx[0]-12),min(len(st)-1,idx[-1]+12)
             if hi-lo<2: continue
             run=sg.LineString(P[lo:hi+1]); band=run.buffer(h+1.0,cap_style=2); own=sg.LineString(P[idx[0]:idx[-1]+1]) if len(idx)>1 else None
@@ -418,6 +418,7 @@ def fill_notches(chains,plan,cls,win=5,verbose=True):
         t=np.gradient(P,axis=0); t/=np.hypot(t[:,0],t[:,1])[:,None]+1e-9; nv=np.c_[-t[:,1],t[:,0]]
         for k in np.unique(st[st>=0]):
             k=int(k); idx=np.where(st==k)[0]
+            if decks[k].get('drawn'): continue
             for run in np.split(idx,np.where(np.diff(idx)>1)[0]+1):
                 if len(run)<win: continue
                 D=decks[k]['poly']; E=[lateral(D,P[i],nv[i],h+10.0) for i in run]
@@ -503,6 +504,55 @@ def end_zones(p):
     return shapely.unary_union([sg.LineString([cen+a*s*L/2-n*40,cen+a*s*L/2+n*40]).buffer(5.0) for s in (-1,1)])
 # (bridge centre, point the bridge must reach): Brevard Road also spans the southern collector roadway
 BRIDGE_REACH=[((283864,207096),(283867,207036))]
+# Section A bridges that carry the freeway over a street. The 2018 design draws each as one outline that the street
+# crosses on the skew, so the street (the longer diagonal run) was being put on the deck, above the freeway.
+FREEWAY_OVER=[(284865,208127)]      # I-26 / I-240 over State Street (Overture flags the freeway as the bridge)
+def freeway_over(plan,chains):
+    """the freeway roadways and ramps crossing a FREEWAY_OVER bridge ride it; every other road passes under it"""
+    for pt in FREEWAY_OVER:
+        k=deck_at(plan,pt); D=plan['decks'][k]['poly']; nd=len(plan['decks'])
+        plan['decks'][k]['drawn']=True     # its 2018 outline is complete: join_decks and fill_notches leave it as drawn
+        for c,ch in chains.items():
+            if not sg.LineString(ch['xy']).intersects(D): continue
+            # (any stretch on it counts: a plan alignment that starts on the bridge rides it from its first station)
+            if c.startswith(('b','e_')) or ch.get('cls')=='motorway': ch['ride']=sorted(set(ch.get('ride',[]))|{k}); ch['ride_min']=0
+            else: ch['decks']=[j for j in (ch['decks'] if ch.get('decks') is not None else range(nd)) if j!=k]
+            print('bridge',k,'over a street at',pt,':',c,'rides it' if k in ch.get('ride',()) else 'passes under it')
+# (median alignment, box): stretches where the 2018 design draws both carriageways' edge-of-travel lines but its pavement
+# fill is missing (north of the State Street bridge, up to where the Section B sheets begin)
+EOT_FILL=[('b0',(284840,208140,285000,208340))]
+def pave_between_edges(plan,chains):
+    """pave each carriageway between its two edge-of-travel lines, cast across from the median alignment: the nearest
+    line on each side is the carriageway's inner edge, the next one out its outer edge"""
+    K=pickle.load(open(W+'/kmz_sp.pkl','rb')); DU=shapely.unary_union([d['poly'] for d in plan['decks']])
+    for c,bx in EOT_FILL:
+        box=sg.box(*bx)
+        EU=shapely.unary_union([sg.LineString(l) for l in K['EOT'] if len(l)>1 and sg.LineString(l).intersects(box.buffer(40))])
+        s_,P=resample(chains[c]['xy'],2.0); t=np.gradient(P,axis=0); t/=np.hypot(t[:,0],t[:,1])[:,None]+1e-9; nv=np.c_[-t[:,1],t[:,0]]
+        sec=[]
+        for i in range(len(P)):
+            if not box.contains(sg.Point(*P[i])): sec.append(None); continue
+            X=sg.LineString([P[i]-nv[i]*30,P[i]+nv[i]*30]).intersection(EU)
+            o=sorted(float((np.array(g.coords[0])-P[i])@nv[i]) for g in getattr(X,'geoms',[X]) if g.geom_type=='Point')
+            lo=[v for v in o if v<0][::-1]; hi=[v for v in o if v>0]
+            ok=len(lo)>=2 and len(hi)>=2 and -lo[0]<10 and hi[0]<10 and 6<lo[0]-lo[1]<22 and 6<hi[1]-hi[0]<22
+            sec.append((lo[1],lo[0],hi[0],hi[1]) if ok else None)
+        quads=[]
+        for i in range(len(P)-1):
+            a,b=sec[i],sec[i+1]
+            if a is None or b is None: continue
+            for u,v in ((0,1),(2,3)):
+                quads.append(sg.Polygon([P[i]+nv[i]*a[u],P[i+1]+nv[i+1]*b[u],P[i+1]+nv[i+1]*b[v],P[i]+nv[i]*a[v]]).buffer(0.05))
+        if not quads: continue
+        fill=polyonly(shapely.unary_union(quads).difference(DU.buffer(0.1)).buffer(-0.3).buffer(0.3))
+        fill=polyonly(fill.difference(plan['G']))
+        # merge into the pieces it touches only; the rest of G stays exactly as it was (a full re-union reorders vertices,
+        # which shifts later simplified outlines, such as the fine-terrain tile set, far from here)
+        parts=list(getattr(plan['G'],'geoms',[plan['G']])); near=[q.intersects(fill.buffer(0.5)) for q in parts]
+        m=shapely.unary_union([q for q,t in zip(parts,near) if t]+[fill]); m=[q for q in getattr(m,'geoms',[m]) if q.geom_type=='Polygon']
+        i0=near.index(True) if any(near) else len(parts)
+        plan['G']=sg.MultiPolygon([q for q,t in zip(parts[:i0],near[:i0]) if not t]+m+[q for q,t in zip(parts[i0:],near[i0:]) if not t])
+        print('paved %.0f m2 between edge lines along'%fill.area,c,'in',bx)
 def add_axis_chains(chains,plan,cls):
     """a bridge nobody rides: bend the nearest parallel local road onto its long axis so it crosses on the bridge"""
     riders=set()
@@ -607,7 +657,8 @@ def load_all():
         for g in (c.geoms if hasattr(c,'geoms') else [c]):
             if g.geom_type=='LineString' and g.length>60: chains[f'x{n}']={'xy':np.array(g.coords),'sig':45.0,'sig_ex':30.0,'cls':r['cls']}; n+=1
     print('x chains',n)
-    plan['G']=G
+    freeway_over(plan,chains)
+    plan['G']=G; pave_between_edges(plan,chains)
     pickle.dump(plan,open(W+'/sheets_plan2.pkl','wb'))
     return plan,chains
 if __name__=='__main__':

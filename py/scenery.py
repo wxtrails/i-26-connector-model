@@ -7,7 +7,14 @@ from scipy.spatial import cKDTree
 from PIL import Image
 OX,OY=285000.0,210000.0
 SX0,SY0,SX1,SY1=279480.0,204480.0,288600.0,214080.0
-rng=np.random.default_rng(7)
+def u01(idx,salt):
+    """a uniform number in [0,1) per image pixel, fixed by the pixel's index alone (splitmix64): a pixel keeps its tree,
+    and the tree its spot and size, whatever a fix changes elsewhere in the model (a random draw over the whole candidate
+    list re-scattered every tree whenever any pavement changed)"""
+    z=np.asarray(idx).astype(np.uint64)*np.uint64(0x9E3779B97F4A7C15)+np.uint64((salt*0xD1B54A32D192ED03)%2**64)
+    z=(z^(z>>np.uint64(30)))*np.uint64(0xBF58476D1CE4E5B9); z=(z^(z>>np.uint64(27)))*np.uint64(0x94D049BB133111EB)
+    return ((z^(z>>np.uint64(31)))>>np.uint64(11)).astype(np.float64)/2.0**53
+TREE_P=0.0266      # share of candidate vegetation pixels that get a tree (about 9000 of 338,000)
 def polys_of(f):
     g=f['geometry']; cs=[g['coordinates']] if g['type']=='Polygon' else g['coordinates']
     out=[]
@@ -104,10 +111,10 @@ def run():
     excl=rasterize([(g,1) for g in [U.buffer(9)]+[p.buffer(4) for p in polys]+rl+wat],out_shape=(H_,W_),transform=T,fill=0,dtype='uint8').astype(bool)
     near=rasterize([(RL.buffer(380),1)],out_shape=(H_,W_),transform=T,fill=0,dtype='uint8').astype(bool)
     ok=veg&~excl&near; ii=np.argwhere(ok); print('veg px',len(ii))
-    sel=ii[rng.choice(len(ii),size=min(len(ii),9000),replace=False)]
-    tx=SX0+(sel[:,1]+rng.random(len(sel)))*px; ty=SY1-(sel[:,0]+rng.random(len(sel)))*px
-    d=shapely.distance(RL,shapely.points(np.c_[tx,ty])); keep=rng.random(len(sel))<np.clip(1.25-d/380,0.25,1)
-    tx,ty=tx[keep],ty[keep]; th=rng.uniform(8,19,len(tx)); ev=(rng.random(len(tx))<0.22).astype(np.float32)
+    lin=ii[:,0].astype(np.int64)*W_+ii[:,1]; pick=u01(lin,1)<TREE_P; sel=ii[pick]; lin=lin[pick]
+    tx=SX0+(sel[:,1]+u01(lin,2))*px; ty=SY1-(sel[:,0]+u01(lin,3))*px
+    d=shapely.distance(RL,shapely.points(np.c_[tx,ty])); keep=u01(lin,4)<np.clip(1.25-d/380,0.25,1)
+    tx,ty,lin=tx[keep],ty[keep],lin[keep]; th=8+11*u01(lin,5); ev=(u01(lin,6)<0.22).astype(np.float32)
     res['trees']=np.c_[tx-OX,-(ty-OY),th,ev].astype(np.float32); print('trees',len(tx))
     # ---------- far terrain
     far=np.load(W+'/dem_far.npy')[::2,::2]; res['far']=np.clip((far-200)*10,0,65535).astype(np.uint16); res['far_meta']={'x0':245000.0,'y1':250000.0,'res':200.0,'w':int(far.shape[1]),'h':int(far.shape[0])}

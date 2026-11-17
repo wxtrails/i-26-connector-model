@@ -79,7 +79,7 @@ def classify(chains,plan,noride=(),straddle=None):
                         j=i
                         while j+1<len(s) and ins[j+1]: j+=1
                         run=s[j]-s[i]
-                        if run>=150 or run>=0.6*dlong[k] or (k in ch.get('ride',()) and run>30):
+                        if run>=150 or run>=0.6*dlong[k] or (k in ch.get('ride',()) and run>ch.get('ride_min',30)):
                             st[i:j+1]=k
                         i=j+1
                     else: i+=1
