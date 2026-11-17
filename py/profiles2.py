@@ -165,9 +165,14 @@ def design2(chains,plan,cls,clear=6.8,grade=0.045,passes=4,verbose=False):
                     t=np.clip(1-np.abs(np.arange(m)-e)*DS/min(260.0,0.6*m*DS),0,1); z=z+(best[1]-z[e])*t*t*(3-2*t)
             if chains[c].get('linear'):
                 # straight grade from end to end; a ramp that starts on a trunk shared with another ramp keeps the
-                # trunk's level and runs straight from the split
+                # trunk's level and runs straight from the split, and one that ends merging alongside another road
+                # (the Patton Avenue ramp joining the I-26 to I-240 East ramp on one bridge) keeps that road's level
+                # from where their lanes meet: two halves of one deck at different heights leave holes between them
                 hk=np.where(hard[:m//2])[0]; a0=int(hk[-1]) if len(hk) and hk[0]*DS<80 else 0
-                line=np.linspace(z[a0],z[-1],m-a0); z[a0:]=line+(1-chains[c]['linear'])*(z[a0:]-line)
+                he=np.where(hard[m//2:])[0]+m//2; b1=m-1
+                if len(he) and (m-1-he[-1])*DS<80:
+                    br=np.where(np.diff(he)>1)[0]; b1=int(he[br[-1]+1] if len(br) else he[0])
+                line=np.linspace(z[a0],z[b1],b1-a0+1); z[a0:b1+1]=line+(1-chains[c]['linear'])*(z[a0:b1+1]-line)
             for (u,i,l,j) in over:   # hard clearance repair
                 if u!=c: continue
                 lack=cls[l]['z'][j]+clear-z[max(0,i-3):i+4].min()
