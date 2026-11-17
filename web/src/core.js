@@ -127,6 +127,9 @@ function meshFrom(pn,inn,mat){
   meshFrom('deck_par_p','deck_par_i',matConc);
   meshFrom('conc_p','conc_i',matConc); meshFrom('wall_p','wall_i',new T.MeshLambertMaterial({color:0xa9a59b,side:T.DoubleSide}));
   meshFrom('fill_p','fill_i',new T.MeshLambertMaterial({color:0x76895a}));   // graded fill between adjacent roads at different levels
+  // sidewalks (red in the plans) and multi-use paths (purple), raised a curb's height beside the road
+  meshFrom('walk_p','walk_i',new T.MeshLambertMaterial({color:0xc4c0b6,side:T.DoubleSide,polygonOffset:true,polygonOffsetFactor:-1,polygonOffsetUnits:-2}));
+  meshFrom('mup_p','mup_i',new T.MeshLambertMaterial({color:0xd2c6ae,side:T.DoubleSide,polygonOffset:true,polygonOffsetFactor:-1,polygonOffsetUnits:-2}));
   meshFrom('mk_w_p','mk_w_i',matWhite); meshFrom('syn_w_p','syn_w_i',matWhite); meshFrom('syn_y_p','syn_y_i',matYellow); meshFrom('mk_y_p','mk_y_i',matYellow);
   const P=buf('piers'); if(P){ const n=P.length/4;
     const g=new T.CylinderGeometry(1.1,1.1,1,10); g.translate(0,0.5,0);

@@ -18,7 +18,8 @@ def run():
     R=pickle.load(open(W+'/routes.pkl','rb')); plan=pickle.load(open(W+'/sheets_plan2.pkl','rb'))
     RL=shapely.unary_union([sg.LineString(r['P']) for r in R]); shapely.prepare(RL)
     PAT=shapely.unary_union([sg.LineString(r['P']) for r in R if r['id'].startswith('pat')])
-    U=shapely.unary_union([plan['G']]+[d['poly'] for d in plan['decks']]); Ub=U.buffer(1.5); shapely.prepare(Ub)
+    WK=[q['poly'] for v in pickle.load(open(W+'/walks.pkl','rb')).values() for q in v]     # sidewalks and paths too
+    U=shapely.unary_union([plan['G']]+[d['poly'] for d in plan['decks']]+WK); Ub=U.buffer(1.5); shapely.prepare(Ub)
     res={}
     # ---------- buildings
     B=json.load(open(W+'/ov/building.geojson'))['features']

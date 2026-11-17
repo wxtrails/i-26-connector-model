@@ -6,7 +6,8 @@ Usage:  uv run python run_all.py            (from the repository root)
 import os, subprocess, sys, time
 ROOT = os.path.dirname(os.path.abspath(__file__))
 PY = os.path.join(ROOT, 'py')
-STEPS = [('profiles2', ['profiles2.py', 'b0']), ('meshz', ['meshz.py']), ('terrain', ['terrain.py']),
+STEPS = [('profiles2', ['profiles2.py', 'b0']), ('meshz', ['meshz.py']), ('walks', ['walks.py']),
+         ('terrain', ['terrain.py']),
          ('routes', ['routes.py']), ('marks', ['marks.py']), ('scenery', ['scenery.py']),
          ('export', ['export.py']), ('build', [os.path.join('..', 'web', 'build.py')])]
 def main():

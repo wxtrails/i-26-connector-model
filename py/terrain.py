@@ -1,6 +1,7 @@
 """Conform terrain to at-grade roads; build two-level terrain tiles."""
 import sys; sys.path.insert(0,__import__('os').path.dirname(__import__('os').path.abspath(__file__)))
 from common import *
+import os
 from surf import Surf
 import shapely, shapely.geometry as sg
 from scipy.ndimage import distance_transform_edt, map_coordinates, zoom, gaussian_filter
@@ -30,12 +31,23 @@ def conform(surf):
         itp=mtri.LinearTriInterpolator(mtri.Triangulation(s['v'][:,0],s['v'][:,1],tri),surf.z[surf.off[i]:surf.off[i+1]])
         z=np.ma.filled(itp(X,Y),np.nan)
         sub=zr[r0:r1,c0:c1]; m=np.isfinite(z); sub[m]=z[m]
-    mask=np.isfinite(zr)
+    # sidewalks and paths (walks.py): the ground meets their edges a little below their surface
+    zw=np.full((h,w),np.nan,np.float32)
+    if os.path.exists(W+'/walks.pkl'):
+        for p in [q for v in pickle.load(open(W+'/walks.pkl','rb')).values() for q in v]:
+            x0,y0,x1,y1=p['poly'].bounds
+            c0=max(0,int((x0-SX0)/RES)-1); c1=min(w,int((x1-SX0)/RES)+2); r0=max(0,int((SY1-y1)/RES)-1); r1=min(h,int((SY1-y0)/RES)+2)
+            if c1<=c0 or r1<=r0: continue
+            X,Y=np.meshgrid(SX0+(np.arange(c0,c1)+0.5)*RES,SY1-(np.arange(r0,r1)+0.5)*RES)
+            z=np.ma.filled(mtri.LinearTriInterpolator(mtri.Triangulation(p['v'][:,0],p['v'][:,1],p['t']),p['z'])(X,Y),np.nan)
+            sub=zw[r0:r1,c0:c1]; m=np.isfinite(z); sub[m]=z[m]
+    zg=np.where(np.isfinite(zr),zr-0.45,zw-0.12)       # the ground's level under each surface
+    mask=np.isfinite(zg)
     d,(ir,ic)=distance_transform_edt(~mask,return_indices=True); d=d*RES
-    znear=zr[ir,ic]
+    znear=zg[ir,ic]
     # grade the ground to the road: level beside the pavement, then 2:1 cut and fill slopes out to natural ground
     lim=np.maximum(d-6.0,0)*0.5
-    out=np.clip(base,znear-0.45-lim,znear-0.45+lim).astype(np.float32)
+    out=np.clip(base,znear-lim,znear+lim).astype(np.float32)
     import caps as CP, pickle as _pk
     CAPS=_pk.load(open(W+'/mesh.pkl','rb')).get('caps',[])
     for c in CAPS:       # ground in the corridor under an overpass is cut down with the road

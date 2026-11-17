@@ -176,10 +176,22 @@ def atlas_meta():
         print('texture atlas',why,'- re-cutting from work/maxar',flush=True)
         import imagery; imagery.atlas(); a=json.load(open(OUT+'/atlas.json'))
     a.pop('tiles',None); return a
+def stage_walks():
+    """sidewalks and multi-use paths (walks.py): top surface plus a skirt down from the edges"""
+    Wk=pickle.load(open(W+'/walks.pkl','rb'))
+    for key,name in (('walk','walk'),('mup','mup')):
+        P=[];I=[];n=0
+        for p in Wk[key]:
+            v=p['v']; t=p['t'].copy()
+            a=v[t[:,0]];b=v[t[:,1]];c=v[t[:,2]]; cr=(b[:,0]-a[:,0])*(c[:,1]-a[:,1])-(b[:,1]-a[:,1])*(c[:,0]-a[:,0]); t[cr<0]=t[cr<0][:,::-1]
+            P.append(toscene(v[:,0],v[:,1],p['z'])); I.append(t+n); n+=len(v)
+            if len(p['sv']): P.append(toscene(p['sv'][:,0],p['sv'][:,1],p['sv'][:,2])); I.append(p['st']+n); n+=len(p['sv'])
+        put(name+'_p',np.vstack(P) if P else np.zeros((0,3),np.float32)); put(name+'_i',(np.vstack(I) if I else np.zeros((0,3))).astype(np.uint32))
 def stage_extra():
     mk=pickle.load(open(W+'/marks.pkl','rb')); sc=pickle.load(open(W+'/scenery.pkl','rb'))
     put('mk_w_p',mk['white'][0]); put('mk_w_i',mk['white'][1]); put('mk_y_p',mk['yellow'][0]); put('mk_y_i',mk['yellow'][1]); put('conc_p',mk['conc'][0]); put('conc_i',mk['conc'][1])
     put('syn_w_p',sc['syn_w'][0]); put('syn_w_i',sc['syn_w'][1]); put('syn_y_p',sc['syn_y'][0]); put('syn_y_i',sc['syn_y'][1])
+    stage_walks()
     for k in ('bld_xy','bld_n','bld_h','bld_t','trees','far'): put(k,sc[k])
     man['far']=sc['far_meta']; man['signs']=sc['signs']
     man['atlas']=atlas_meta()
