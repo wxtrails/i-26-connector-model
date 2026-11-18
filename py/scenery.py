@@ -2,7 +2,7 @@
 import sys; sys.path.insert(0,__import__('os').path.dirname(__import__('os').path.abspath(__file__)))
 from common import *
 import os
-import shapely, shapely.geometry as sg
+import shapely, shapely.geometry as sg, shapely.ops
 from scipy.spatial import cKDTree
 from PIL import Image
 OX,OY=285000.0,210000.0
@@ -21,8 +21,23 @@ def polys_of(f):
     for c in cs:
         a=np.array(c[0]); x,y=ll2sp(a[:,0],a[:,1]); out.append(np.c_[x,y])
     return out
+# Infields of the interchange 650 m south of State Street (Amboy Road): the ground between each ramp and the I-26
+# carriageway it leaves or joins, closed by the ramp and that carriageway's centreline (profiles2 IC_ROADS). Buildings
+# there were taken down for the project (two between the south-bound off-ramp ic_wn and I-26) and are left out.
+IC_INFIELDS=[('ic_wn','ic_sb'),('ic_ws','ic_sb'),('ic_en','ic_nb'),('ic_es','ic_nb')]
+def ic_infields():
+    cls=pickle.load(open(W+'/profiles.pkl','rb'))['cls']; out=[]
+    for ramp,main in IC_INFIELDS:
+        if ramp not in cls or main not in cls: continue
+        Rp=cls[ramp]['P']; M=sg.LineString(cls[main]['P'])
+        a,b=M.project(sg.Point(*Rp[0])),M.project(sg.Point(*Rp[-1]))
+        m=np.array(shapely.ops.substring(M,min(a,b),max(a,b)).coords)
+        if a<b: m=m[::-1]       # back along the carriageway from the ramp's far end to its roundabout end
+        out.append(sg.Polygon(np.vstack([Rp,m])).buffer(0))
+    return shapely.unary_union(out) if out else sg.Polygon()
 def run():
     R=pickle.load(open(W+'/routes.pkl','rb')); plan=pickle.load(open(W+'/sheets_plan2.pkl','rb'))
+    ICF=ic_infields(); shapely.prepare(ICF); n_icf=0
     RL=shapely.unary_union([sg.LineString(r['P']) for r in R]); shapely.prepare(RL)
     PAT=shapely.unary_union([sg.LineString(r['P']) for r in R if r['id'].startswith('pat')])
     WK=[q['poly'] for v in pickle.load(open(W+'/walks.pkl','rb')).values() for q in v]     # sidewalks and paths too
@@ -43,6 +58,7 @@ def run():
             d=RL.distance(pg)
             if d>520: continue
             if Ub.intersects(pg): continue      # removed for the project / under new pavement
+            if ICF.intersects(pg): n_icf+=1; continue       # in an interchange infield: taken down for the project
             pg=pg.simplify(0.4); pg=sg.polygon.orient(pg,1.0)
             a=np.array(pg.exterior.coords)[:-1]
             if len(a)<3 or len(a)>60: continue
@@ -54,7 +70,7 @@ def run():
             elif area>1800 and h<11: t=3
             else: t=1
             xy.append(a); cnt.append(len(a)); hh.append(h); typ.append(t); polys.append(pg)
-    print('buildings',len(cnt),'types',np.bincount(typ))
+    print('buildings',len(cnt),'types',np.bincount(typ),'; left out in interchange infields',n_icf)
     res['bld_xy']=np.vstack([np.c_[a[:,0]-OX,-(a[:,1]-OY)] for a in xy]).astype(np.float32); res['bld_n']=np.array(cnt,np.uint16); res['bld_h']=np.array(hh,np.float32); res['bld_t']=np.array(typ,np.uint8)
     # ---------- storefront signs from places
     P=json.load(open(W+'/ov/place.geojson'))['features']

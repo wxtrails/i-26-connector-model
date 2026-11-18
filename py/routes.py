@@ -51,16 +51,18 @@ class Builder:
         U=shapely.unary_union([self.plan['G']]+[d['poly'] for d in self.plan['decks']]).buffer(0.5); self.U=U; shapely.prepare(self.U)
         A=pickle.load(open(W+'/arrows.pkl','rb')); a=np.vstack([np.array(A['pdf'])[:,:4],np.array(A['kmz'])[:,:4]])
         n=np.hypot(a[:,2],a[:,3]); self.AP=a[:,:2]; self.AD=a[:,2:4]/n[:,None]; self.AT=cKDTree(self.AP)
-    def guide_sb(self,fade=80.0):
+    def guide_sb(self,fade=80.0,reach=80.0):
         """move today's south-bound I-26 centreline onto the new south-bound carriageway's right-hand lane along SB_GUIDE
-        (fading in and out over the guide's first and last fade m)"""
+        (fading in and out over the guide's first and last fade m). Stations up to reach m from the guide move all the way
+        (fading to none over the last 10 m): beside the bridge over the roundabout road today's line runs up to 54 m from
+        the new carriageway, and a 60 m reach moved it only part of the way there, an S-bend across the bridge"""
         if 'ic_sb' not in self.cls or 'e_south_out' not in self.cls: return
         G=np.vstack([np.array(SB_GUIDE,float),self.cls['ic_sb']['P']]); t=tangents(G)
         G=sg.LineString(G+np.c_[-t[:,1],t[:,0]]*1.8)      # in the right-hand lane (south-bound runs against the guide's direction)
         P=self.cls['e_south_out']['P']; pts=shapely.points(P)
         s=shapely.line_locate_point(G,pts); d=shapely.distance(G,pts); Q=shapely.get_coordinates(shapely.line_interpolate_point(G,s))
         ss=lambda u:np.clip(u,0,1)**2*(3-2*np.clip(u,0,1))
-        w=ss(np.minimum(s,G.length-s)/fade)*ss((60.0-d)/10.0)
+        w=ss(np.minimum(s,G.length-s)/fade)*ss((reach-d)/10.0)
         self.cls['e_south_out']=dict(self.cls['e_south_out'],P=P+(Q-P)*w[:,None])
         print('south-bound I-26 guided onto its new carriageway over %.0f m (moved up to %.1f m)'%((w>0.5).sum()*np.median(np.hypot(*np.diff(P,axis=0).T)),(np.hypot(*(Q-P).T)*w).max()))
     def ctree(self,c):
