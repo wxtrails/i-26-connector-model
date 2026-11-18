@@ -96,8 +96,9 @@ def run(planfile='/sheets_plan2.pkl'):
                 if inz.any(): u=np.clip(shapely.distance(ICZ.boundary,pts[inz])/IC_FADE,0,1); wz[inz]=u*u*(3-2*u)
             if (wz>0).any():
                 zb,denb,dminb=mix(icm); m=(wz>0)&(denb>0); both=m&(den>0)
-                zi=np.where(both,wz*zb+(1-wz)*np.nan_to_num(zi),np.where(m,zb,zi))
-                dmin=np.where(both,wz*dminb+(1-wz)*dmin,np.where(m,dminb,dmin)); den=np.where(m,np.maximum(den,denb),den)
+                with np.errstate(invalid='ignore'):     # np.where works out both branches: inf*0 in cells it then discards
+                    zi=np.where(both,wz*zb+(1-wz)*np.nan_to_num(zi),np.where(m,zb,zi))
+                    dmin=np.where(both,wz*dminb+(1-wz)*dmin,np.where(m,dminb,dmin)); den=np.where(m,np.maximum(den,denb),den)
         if key<0:
             wa=np.clip((50.0-dmin)/30.0,0,1); wa=wa*wa*(3-2*wa)
             zz_=np.where(den>0,zi*wa+zt[off[i]:off[i+1]]*(1-wa),zt[off[i]:off[i+1]])

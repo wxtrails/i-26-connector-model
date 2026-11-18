@@ -32,6 +32,11 @@ ROUTES=[
  ('patw_i26s','Patton Avenue to I-26','Patton Avenue (from West Asheville) onto I-26 south',PATW_IN+[L('b24',-1,0,False,RP),L('b0',-1,9.0,True,FW)]+SOUTH_OUT),
  ('pate_i26s','Patton Avenue to I-26','Patton Avenue (from downtown) onto I-26 south',PATE_IN+[L('b10',-1,5.2,True,ST),L('b24',-1,0,False,RP),L('b0',-1,9.0,True,FW)]+SOUTH_OUT),
 ]
+# I-26 south of State Street: the south-bound drives follow today's south-bound centreline (e_south_out), which runs on
+# the new north-bound carriageway from just north of the interchange 650 m south of State Street to the bridge about
+# 850 m south-west of it (over a side street). There they follow the middle of the new south-bound carriageway instead:
+# these points (traced from its pavement, south to north), then the interchange's own centreline for it (profiles2 ic_sb)
+SB_GUIDE=[(283694,207045),(283743,207062),(283792,207079),(283843,207099),(283890,207120),(283940,207144),(283990,207170)]
 def tangents(P):
     t=np.gradient(P,axis=0); return t/(np.hypot(t[:,0],t[:,1])[:,None]+1e-9)
 def resamp(P,ds):
@@ -41,10 +46,23 @@ class Builder:
         self.cls=pickle.load(open(W+'/profiles.pkl','rb'))['cls']; self.surf=Surf()
         for c in list(self.cls):
             if c.endswith('_out') and c[:-4]+'_in' not in self.cls: self.cls[c[:-4]+'_in']={'P':self.cls[c]['P'][::-1].copy(),'same':True}
+        self.guide_sb()
         self.plan=pickle.load(open(W+'/sheets_plan2.pkl','rb'))
         U=shapely.unary_union([self.plan['G']]+[d['poly'] for d in self.plan['decks']]).buffer(0.5); self.U=U; shapely.prepare(self.U)
         A=pickle.load(open(W+'/arrows.pkl','rb')); a=np.vstack([np.array(A['pdf'])[:,:4],np.array(A['kmz'])[:,:4]])
         n=np.hypot(a[:,2],a[:,3]); self.AP=a[:,:2]; self.AD=a[:,2:4]/n[:,None]; self.AT=cKDTree(self.AP)
+    def guide_sb(self,fade=80.0):
+        """move today's south-bound I-26 centreline onto the new south-bound carriageway's right-hand lane along SB_GUIDE
+        (fading in and out over the guide's first and last fade m)"""
+        if 'ic_sb' not in self.cls or 'e_south_out' not in self.cls: return
+        G=np.vstack([np.array(SB_GUIDE,float),self.cls['ic_sb']['P']]); t=tangents(G)
+        G=sg.LineString(G+np.c_[-t[:,1],t[:,0]]*1.8)      # in the right-hand lane (south-bound runs against the guide's direction)
+        P=self.cls['e_south_out']['P']; pts=shapely.points(P)
+        s=shapely.line_locate_point(G,pts); d=shapely.distance(G,pts); Q=shapely.get_coordinates(shapely.line_interpolate_point(G,s))
+        ss=lambda u:np.clip(u,0,1)**2*(3-2*np.clip(u,0,1))
+        w=ss(np.minimum(s,G.length-s)/fade)*ss((60.0-d)/10.0)
+        self.cls['e_south_out']=dict(self.cls['e_south_out'],P=P+(Q-P)*w[:,None])
+        print('south-bound I-26 guided onto its new carriageway over %.0f m (moved up to %.1f m)'%((w>0.5).sum()*np.median(np.hypot(*np.diff(P,axis=0).T)),(np.hypot(*(Q-P).T)*w).max()))
     def ctree(self,c):
         if not hasattr(self,'_ct'): self._ct={}
         if c not in self._ct: self._ct[c]=cKDTree(self.cls[c]['P'])

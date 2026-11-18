@@ -687,6 +687,9 @@ IC_ROADS={
  'ic_ee':('rampE',8.0,[IC_E,(284722,207500),(284745,207494),(284780,207486),(284820,207476),(284860,207466),(284900,207456),(284960,207445)]),
 }
 IC_END={'ic_ee':607.0}      # where a leg ends on a road the interchange does not cover (else it ends at I-26's level)
+# today's roads left over just outside the area that the plan replaces: the end of today's south-bound on-ramp, on the hill
+# 3 to 6 m above the new south-bound carriageway beside it, pulled that carriageway's pavement up (the road through each point)
+IC_DROP=[(283942,207174)]
 def ic_centre(pts,PV,step=5.0):
     """resample a hand-traced centreline and move each station to the middle of the pavement band it lies in (bands 4 to
     20 m wide; on wider pavement, such as a bridge carrying both carriageways, the traced line is kept)"""
@@ -724,6 +727,9 @@ def ic_build(plan,chains):
         if not rest: del chains[c]; continue
         chains[c]=dict(chains[c],xy=np.array(rest[0].coords))
         for q,g in enumerate(rest[1:]): chains[f'{c}_{q+1}']=dict(chains[c],xy=np.array(g.coords))
+    for p in IC_DROP:
+        c=min((c for c in chains if c.startswith('x')),key=lambda c:sg.LineString(chains[c]['xy']).distance(sg.Point(*p)))
+        if sg.LineString(chains[c]['xy']).distance(sg.Point(*p))<5.0: print('interchange: today\'s road',c,'dropped'); del chains[c]
     # the road under the bridge: paved through it (the plan's pavement stops at the bridge outline)
     cn=sg.LineString(chains['ic_cn']['xy'])
     fill=polyonly(cn.buffer(IC_ROADS['ic_cn'][1]-0.3,cap_style=2).intersection(dk['poly'].buffer(1.0)))
