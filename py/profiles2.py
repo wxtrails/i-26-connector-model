@@ -453,6 +453,9 @@ def patch_plan(chains,plan,cls):
     addG=[]; nd=0
     for c,d in cls.items():
         xr=c.startswith('x') and chains[c].get('ride')
+        # (an Overture freeway riding a bridge over a street runs down the median here: pave_between_edges paves the
+        # carriageways from the plan's edge lines instead)
+        if xr and all(decks[k].get('over_street') for k in chains[c]['ride']): xr=False
         if (c.startswith('x') and not xr) or c.startswith('y'): continue
         P=d['P']; st=d['st']; pts=shapely.points(P); h=hw(c,chains); ls=sg.LineString(P)
         inG=shapely.contains(Gb,pts); inD=shapely.contains(DU.buffer(0.6),pts)
@@ -512,47 +515,83 @@ def freeway_over(plan,chains):
     for pt in FREEWAY_OVER:
         k=deck_at(plan,pt); D=plan['decks'][k]['poly']; nd=len(plan['decks'])
         plan['decks'][k]['drawn']=True     # its 2018 outline is complete: join_decks and fill_notches leave it as drawn
+        plan['decks'][k]['over_street']=True   # (meshz.py: its clearance cap shapes the ground under it, not the pavement)
         for c,ch in chains.items():
             if not sg.LineString(ch['xy']).intersects(D): continue
             # (any stretch on it counts: a plan alignment that starts on the bridge rides it from its first station)
             if c.startswith(('b','e_')) or ch.get('cls')=='motorway': ch['ride']=sorted(set(ch.get('ride',[]))|{k}); ch['ride_min']=0
             else: ch['decks']=[j for j in (ch['decks'] if ch.get('decks') is not None else range(nd)) if j!=k]
             print('bridge',k,'over a street at',pt,':',c,'rides it' if k in ch.get('ride',()) else 'passes under it')
-# (median alignment, box): stretches where the 2018 design draws both carriageways' edge-of-travel lines but its pavement
-# fill is missing (north of the State Street bridge, up to where the Section B sheets begin)
-EOT_FILL=[('b0',(284840,208140,285000,208340))]
+# (median alignment, box, clear below y): stretches where the 2018 design draws both carriageways' edge-of-travel lines
+# but its pavement fill is missing (north of the State Street bridge, up to where the Section B sheets pave the northbound
+# side again); south of 'clear below y' the KMZ's odd pavement pieces there, drawn 3 m east of the plan sheets' lines,
+# are cleared from beside the new carriageways (north of it the Haywood Road on-ramp joins the southbound side)
+EOT_FILL=[('b0',(284840,208140,285000,208400),208270)]
+EOT_TAPER=40.0      # m over which the carriageways move across from the KMZ's edge lines to the plan sheets'
+def eot_sections(lines,P,nv,box):
+    """per station of the median alignment: (outer, inner) edge offsets of the right carriageway and (inner, outer) of
+    the left one, cast across to the edge lines; None where they are not two clean pairs"""
+    EU=shapely.unary_union([sg.LineString(l) for l in lines if len(l)>1 and sg.LineString(l).intersects(box.buffer(40))])
+    sec=[]
+    for i in range(len(P)):
+        if not box.contains(sg.Point(*P[i])): sec.append(None); continue
+        X=sg.LineString([P[i]-nv[i]*30,P[i]+nv[i]*30]).intersection(EU)
+        o=sorted(float((np.array(g.coords[0])-P[i])@nv[i]) for g in getattr(X,'geoms',[X]) if g.geom_type=='Point')
+        o=[v for j,v in enumerate(o) if j==0 or v-o[j-1]>0.3]      # one line drawn twice (overlapping plan sheets)
+        lo=[v for v in o if v<0][::-1]; hi=[v for v in o if v>0]
+        ok=len(lo)>=2 and len(hi)>=2 and -lo[0]<10 and hi[0]<10 and 6<lo[0]-lo[1]<22 and 6<hi[1]-hi[0]<22
+        sec.append(np.array((lo[1],lo[0],hi[0],hi[1])) if ok else None)
+    return sec
 def pave_between_edges(plan,chains):
     """pave each carriageway between its two edge-of-travel lines, cast across from the median alignment: the nearest
-    line on each side is the carriageway's inner edge, the next one out its outer edge"""
+    line on each side is the carriageway's inner edge, the next one out its outer edge.
+    The plan sheets' lines are used where they exist: the lane lines and the median alignment come from the same
+    sheets. The 2018 KMZ draws this stretch about 3 m further east, as it does the bridge outline, so the carriageways
+    leave the bridge on the KMZ's lines and move across to the plan sheets' over the first EOT_TAPER m."""
     K=pickle.load(open(W+'/kmz_sp.pkl','rb')); DU=shapely.unary_union([d['poly'] for d in plan['decks']])
-    for c,bx in EOT_FILL:
+    LY=pickle.load(open(W+'/pdf_layers.pkl','rb'))
+    PE=[np.asarray(it[1] if isinstance(it,tuple) else it,float) for it in LY.get(('Prop EOT','s'),[])]
+    for c,bx,yclr in EOT_FILL:
         box=sg.box(*bx)
-        EU=shapely.unary_union([sg.LineString(l) for l in K['EOT'] if len(l)>1 and sg.LineString(l).intersects(box.buffer(40))])
         s_,P=resample(chains[c]['xy'],2.0); t=np.gradient(P,axis=0); t/=np.hypot(t[:,0],t[:,1])[:,None]+1e-9; nv=np.c_[-t[:,1],t[:,0]]
-        sec=[]
+        sk=eot_sections(K['EOT'],P,nv,box); sp=eot_sections(PE,P,nv,box)
+        iP=[i for i in range(len(P)) if sp[i] is not None]; s0=s_[iP[0]] if iP else np.inf
+        sec=[]; wt=[]
         for i in range(len(P)):
-            if not box.contains(sg.Point(*P[i])): sec.append(None); continue
-            X=sg.LineString([P[i]-nv[i]*30,P[i]+nv[i]*30]).intersection(EU)
-            o=sorted(float((np.array(g.coords[0])-P[i])@nv[i]) for g in getattr(X,'geoms',[X]) if g.geom_type=='Point')
-            lo=[v for v in o if v<0][::-1]; hi=[v for v in o if v>0]
-            ok=len(lo)>=2 and len(hi)>=2 and -lo[0]<10 and hi[0]<10 and 6<lo[0]-lo[1]<22 and 6<hi[1]-hi[0]<22
-            sec.append((lo[1],lo[0],hi[0],hi[1]) if ok else None)
-        quads=[]
+            w=float(np.clip((s_[i]-s0)/EOT_TAPER,0,1)) if sp[i] is not None else 0.0
+            if sk[i] is None: w=1.0 if sp[i] is not None else 0.0
+            sec.append(None if sk[i] is None and sp[i] is None else sp[i] if w==1.0 else sk[i] if w==0.0 else (1-w)*sk[i]+w*sp[i])
+            wt.append(w)
+        quads=[]; qp=[]
         for i in range(len(P)-1):
             a,b=sec[i],sec[i+1]
             if a is None or b is None: continue
             for u,v in ((0,1),(2,3)):
                 quads.append(sg.Polygon([P[i]+nv[i]*a[u],P[i+1]+nv[i+1]*b[u],P[i+1]+nv[i+1]*b[v],P[i]+nv[i]*a[v]]).buffer(0.05))
+                if min(wt[i],wt[i+1])>=0.5: qp.append(quads[-1])
         if not quads: continue
-        fill=polyonly(shapely.unary_union(quads).difference(DU.buffer(0.1)).buffer(-0.3).buffer(0.3))
-        fill=polyonly(fill.difference(plan['G']))
+        zone=shapely.unary_union(quads)
+        # clear the KMZ's pieces from the verges and the median beside the new carriageways (only the pieces there change)
+        RM=zone.buffer(6.0).intersection(sg.box(bx[0],bx[1],bx[2],yclr)).difference(zone.buffer(0.05)).difference(DU.buffer(2.0))
+        parts=[]
+        for q in getattr(plan['G'],'geoms',[plan['G']]):
+            if not q.intersects(RM): parts.append(q); continue
+            r=q.difference(RM); parts+=[g for g in getattr(r,'geoms',[r]) if g.geom_type=='Polygon' and g.area>1.0]
+            print('cleared %.0f m2 of pavement beside the new carriageways at'%q.intersection(RM).area,np.round(q.representative_point().coords[0]))
+        fill=polyonly(zone.difference(DU.buffer(0.1)).buffer(-0.3).buffer(0.3))
+        fill=polyonly(fill.difference(sg.MultiPolygon(parts)))
         # merge into the pieces it touches only; the rest of G stays exactly as it was (a full re-union reorders vertices,
         # which shifts later simplified outlines, such as the fine-terrain tile set, far from here)
-        parts=list(getattr(plan['G'],'geoms',[plan['G']])); near=[q.intersects(fill.buffer(0.5)) for q in parts]
+        near=[q.intersects(fill.buffer(0.5)) for q in parts]
         m=shapely.unary_union([q for q,t in zip(parts,near) if t]+[fill]); m=[q for q in getattr(m,'geoms',[m]) if q.geom_type=='Polygon']
+        # (slivers left where a cleared piece met the new pavement)
+        m=[sg.Polygon(q.exterior,[h for h in q.interiors if not (sg.Polygon(h).area<20 and box.contains(sg.Polygon(h)))]) for q in m]
         i0=near.index(True) if any(near) else len(parts)
         plan['G']=sg.MultiPolygon([q for q,t in zip(parts[:i0],near[:i0]) if not t]+m+[q for q,t in zip(parts[i0:],near[i0:]) if not t])
-        print('paved %.0f m2 between edge lines along'%fill.area,c,'in',bx)
+        # for marks.py: lines inside the zone are kept to its pavement, and where the plan sheets' edges govern, the
+        # KMZ's own edge lines (3 m away) are left out
+        plan.setdefault('eot_fill',[]).append({'zone':zone.difference(DU),'pdf':shapely.unary_union(qp).difference(DU) if qp else sg.Polygon()})
+        print('paved %.0f m2 between edge lines along'%fill.area,c,'in',bx,'(plan sheets\' lines from %.0f m along it)'%s0)
 def add_axis_chains(chains,plan,cls):
     """a bridge nobody rides: bend the nearest parallel local road onto its long axis so it crosses on the bridge"""
     riders=set()

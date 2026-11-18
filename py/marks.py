@@ -129,6 +129,24 @@ def build(surf=None):
     surf=surf or Surf(); pk=Picker(surf)
     L=pickle.load(open(W+'/pdf_layers.pkl','rb')); K=pickle.load(open(W+'/kmz_sp.pkl','rb'))
     white=Strips(); conc=Strips(); yellow=Strips()
+    # stretches profiles2.pave_between_edges paved between edge lines: lines there stay on its pavement, and where it
+    # follows the plan sheets' edges, the KMZ's own edge lines (drawn about 3 m to the east) are left out
+    PL2=pickle.load(open(W+'/sheets_plan2.pkl','rb')); EF=PL2.get('eot_fill',[])
+    if EF:
+        ZN=shapely.unary_union([e['zone'] for e in EF]).buffer(3.0); shapely.prepare(ZN)
+        PZ=shapely.unary_union([e['pdf'] for e in EF]).buffer(6.0)
+        PV=shapely.unary_union([PL2['G']]+[d['poly'] for d in PL2['decks']]).buffer(0.3); shapely.prepare(PV)
+        def on_pave(add):
+            def f(P,z,w,**kw):
+                P=np.asarray(P,float); z=np.array(z,float); pts=shapely.points(P)
+                z[shapely.contains(ZN,pts)&~shapely.contains(PV,pts)]=np.nan
+                return add(P,z,w,**kw)
+            return f
+        white.add=on_pave(white.add); yellow.add=on_pave(yellow.add)
+    def kmz_edge(a):
+        if not EF: return [a]
+        g=sg.LineString(a).difference(PZ)
+        return [np.asarray(q.coords) for q in getattr(g,'geoms',[g]) if q.geom_type=='LineString' and q.length>=0.5]
     def dashes(a,z,period=12.0,on=3.0):
         # 10 ft dashes, 30 ft gaps
         s=np.r_[0,np.cumsum(np.hypot(*np.diff(a,axis=0).T))]
@@ -147,7 +165,7 @@ def build(surf=None):
     prf=pickle.load(open(W+'/profiles.pkl','rb')); AR=pickle.load(open(W+'/arrows.pkl','rb')); AR=np.vstack([AR['pdf'][:,:4],AR['kmz'][:,:4]])
     TR=PT.Traffic(prf['cls'],prf['chains'],hw,AR)
     ll=dedupe(lines_of(L,('Prop Lane Lines','s'))); print('lane lines',len(ll))
-    eot=dedupe(lines_of(L,('Prop EOT','s')))+[a for a in K['EOT'] if a[:,1].mean()<208250]
+    eot=dedupe(lines_of(L,('Prop EOT','s')))+[q for a in K['EOT'] if a[:,1].mean()<208250 for q in kmz_edge(a)]
     lanes=[densify(simp(a,0.05),4.0) for a in PT.chain_lines(ll)]
     edges=[densify(simp(a,0.05),4.0) for a in PT.chain_lines([a for a in eot if np.hypot(*np.diff(a,axis=0).T).sum()>=0.5])]
     rl,re=PT.roles(lanes,edges,TR,AR); rl=[PT.smooth(x) for x in rl]; re=[PT.smooth(x) for x in re]

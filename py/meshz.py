@@ -31,6 +31,9 @@ def run(planfile='/sheets_plan2.pkl'):
     DU=shapely.unary_union([d['poly'] for d in plan['decks']]).buffer(1.0); shapely.prepare(DU)
     import caps as CP
     CAPS=CP.build(plan,cls); print('clearance caps',len(CAPS)); nlow=0
+    # a freeway bridge over a street keeps its cap for the ground under it (terrain.py cuts the street's corridor), but
+    # not for pavement: past both ends of the deck the cap would pull the freeway's own approach down to street level
+    CAPG=[c for c in CAPS if not plan['decks'][c['k']].get('over_street')]
     ndrop=0
     for i,s in enumerate(sheets):
         P=s['v']; key=-1 if s['kind']=='G' else s['deck']
@@ -69,7 +72,7 @@ def run(planfile='/sheets_plan2.pkl'):
         if key<0:
             wa=np.clip((50.0-dmin)/30.0,0,1); wa=wa*wa*(3-2*wa)
             zz_=np.where(den>0,zi*wa+zt[off[i]:off[i+1]]*(1-wa),zt[off[i]:off[i+1]])
-            cf=CP.field(CAPS,P[:,0],P[:,1]); nlow+=int((zz_>cf+0.05).sum()); zz_=np.minimum(zz_,cf)
+            cf=CP.field(CAPG,P[:,0],P[:,1]); nlow+=int((zz_>cf+0.05).sum()); zz_=np.minimum(zz_,cf)
         else:
             zz_=np.where(den>0,zi,zt[off[i]:off[i+1]]+6)
             if fallback or (den==0).any(): print('deck',key,'fallback' if fallback else '','unassigned',int((den==0).sum()),'of',len(P),s['poly'].representative_point().coords[0])
