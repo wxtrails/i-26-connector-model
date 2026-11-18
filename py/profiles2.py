@@ -84,7 +84,7 @@ def relations(chains,plan,cls,verbose=False):
 def design2(chains,plan,cls,clear=6.8,grade=0.045,passes=4,verbose=False):
     over,pins,par=relations(chains,plan,cls,verbose)
     crossed=set((min(u,l),max(u,l)) for (u,i,l,j) in over)
-    ids=list(chains.keys()); pr={c:(PRIO.index(c) if c in PRIO else 1000+k if chains[c].get('ic') else 50+k) for k,c in enumerate(ids)}
+    ids=list(chains.keys()); pr={c:(PRIO.index(c) if c in PRIO else 1000+k if chains[c].get('ic') or chains[c].get('br') else 50+k) for k,c in enumerate(ids)}
     Gex=plan.get('Gexist'); Gb=Gex.buffer(1.0) if Gex is not None else None
     base={}; need={}; ktrees={c:cKDTree(cls[c]['P']) for c in ids}
     for c in ids:
@@ -117,7 +117,7 @@ def design2(chains,plan,cls,clear=6.8,grade=0.045,passes=4,verbose=False):
             m=len(base[l]); t=np.clip(1-np.abs(np.arange(m)-j)*DS/110.0,0,1); base[l]=base[l]-min(lack,5.0)*t*t*(3-2*t)
     for it in range(passes):
         for c in sorted(ids,key=lambda c:pr[c]):
-            if chains[c].get('ic'): continue
+            if chains[c].get('ic') or chains[c].get('br'): continue
             d=cls[c]; m=len(d['z']); mm=need[c].copy()
             for (u,i,l,j) in over:
                 if u!=c: continue
@@ -182,7 +182,7 @@ def design2(chains,plan,cls,clear=6.8,grade=0.045,passes=4,verbose=False):
                 if lack>0: 
                     t=np.clip(1-np.abs(np.arange(m)-i)*DS/(40+lack/grade),0,1); z=z+lack*t*t*(3-2*t)
             d['z']=gs(z,12.0)
-    twin_ties(cls,ids); ic_profiles(chains,cls,plan)
+    twin_ties(cls,ids); ic_profiles(chains,cls,plan); br_profiles(chains,cls,plan)
     return cls
 # carriageways of one freeway that the Overture centrelines split too far apart for the side-by-side tie (14 m): within
 # the box, the road through the first point runs at the level of the road through the second (Hominy Creek Road bridge:
@@ -474,7 +474,7 @@ def patch_plan(chains,plan,cls):
         # (an Overture freeway riding a bridge over a street runs down the median here: pave_between_edges paves the
         # carriageways from the plan's edge lines instead)
         if xr and all(decks[k].get('over_street') for k in chains[c]['ride']): xr=False
-        if (c.startswith('x') and not xr) or c.startswith('y') or chains[c].get('ic'): continue
+        if (c.startswith('x') and not xr) or c.startswith('y') or chains[c].get('ic') or chains[c].get('br'): continue
         P=d['P']; st=d['st']; pts=shapely.points(P); h=hw(c,chains); ls=sg.LineString(P)
         inG=shapely.contains(Gb,pts); inD=shapely.contains(DU.buffer(0.6),pts)
         m=(st<0)&~inG
@@ -523,8 +523,6 @@ def axis_of(p):
 def end_zones(p):
     a,L,c=axis_of(p); cen=np.array(p.centroid.coords[0]); n=np.array([-a[1],a[0]])
     return shapely.unary_union([sg.LineString([cen+a*s*L/2-n*40,cen+a*s*L/2+n*40]).buffer(5.0) for s in (-1,1)])
-# (bridge centre, point the bridge must reach): Brevard Road also spans the southern collector roadway
-BRIDGE_REACH=[((283864,207096),(283867,207036))]
 # Section A bridges that carry the freeway over a street. The 2018 design draws each as one outline that the street
 # crosses on the skew, so the street (the longer diagonal run) was being put on the deck, above the freeway.
 FREEWAY_OVER=[(284865,208127)]      # I-26 / I-240 over State Street (Overture flags the freeway as the bridge)
@@ -779,6 +777,82 @@ def ic_profiles(chains,cls,plan):
         g=np.abs(np.gradient(cls[c]['z'],cls[c]['s'])).max()*100
         print('interchange %-6s %6.1f .. %6.1f m, max grade %.1f%%'%(c,cls[c]['z'].min(),cls[c]['z'].max(),g))
     print('interchange: bridge lowest %.1f, road under it %.1f, roundabouts %.1f / %.1f'%(zd,zc,zW,zE))
+# The Brevard Road interchange, 850 m south-west of the roundabout interchange. The 2018 design draws one short bridge
+# (BR_DECK) whose skewed ends run along the outer edges of the two I-26 carriageways, so it stands on walls at those
+# edges, and four ramps meet Brevard Road just beyond its ends. Section A borrows today's road levels, and today's
+# ramps run elsewhere: the new ramps' pavement took I-26's level right up to Brevard Road, and a bridge lengthened over
+# the ramp junctions hid the mismatch. Here:
+#  * the bridge keeps its drawn outline and is walled: its ends stand on retaining walls with fill behind them
+#    (gapfill.py), and the clearance cap under it (caps.py) stops at its ends
+#  * I-26 is paved through under it (the plan's pavement stops at the bridge outline)
+#  * the ramps get their own centrelines ('br_' chains), level with Brevard Road where they meet it and graded straight
+#    from there to the road their far end joins; today's ramps (the roads through BR_DROP) are dropped
+BR_DECK=(283864,207096)
+BR_N=(283862,207140); BR_S=(283865,207052)      # where the ramps meet Brevard Road, beyond the bridge's two ends
+# name: (half-width, centreline points from Brevard Road outward, chain the far end joins; None: the nearest road there)
+BR_RAMPS={
+ 'br_nw':(4.0,[BR_N,(283820,207134),(283802,207127),(283783,207118),(283765,207110),(283747,207102),(283729,207094),(283710,207086),(283692,207078),(283674,207070),(283655,207061)],None),
+ 'br_sw':(5.0,[BR_S,(283838,207038),(283814,207030),(283795,207025),(283776,207019),(283756,207013),(283737,207008),(283717,207003),(283698,206997),(283679,206993)],None),
+ 'br_ne':(4.0,[BR_N,(283897,207156),(283916,207162),(283935,207168),(283954,207176),(283972,207185),(283989,207195),(284007,207204),(284026,207213)],'ic_ws'),
+ 'br_se':(4.0,[BR_S,(283910,207059),(283929,207065),(283948,207072),(283966,207081),(283984,207090),(284002,207100),(284019,207112),(284036,207124),(284053,207138),(284061,207145)],'ic_es'),
+}
+BR_DROP=[(283795,207116),(283815,207057),(283966,207113)]     # today's ramps north-west, south-west and south-east of it
+def br_build(plan,chains):
+    """mark the Brevard Road bridge walled (its ends: the outline's edges along I-26), add the ramps, drop today's"""
+    k=deck_at(plan,BR_DECK); d=plan['decks'][k]; plan['br_deck']=k
+    d['walled']=True; d['drawn']=True       # (join_decks and fill_notches leave its outline as drawn)
+    P=chains['e_south_out']['xy']; j=int(np.argmin(np.hypot(*(P-np.array(BR_DECK)).T)))
+    t=P[min(j+3,len(P)-1)]-P[max(j-3,0)]; t=t/np.hypot(*t); cen=np.array(d['poly'].centroid.coords[0])
+    E=np.array(sg.Polygon(d['poly'].exterior).simplify(0.5).exterior.coords); ends={}
+    for p,q in zip(E[:-1],E[1:]):
+        e=q-p
+        if np.hypot(*e)<2 or abs(e@t)/np.hypot(*e)<0.94: continue
+        side=int(np.sign(((p+q)/2-cen)@np.array([-t[1],t[0]]))); ends.setdefault(side,[]).extend([p,q])
+    d['ends']=[]
+    for side,pts in ends.items():
+        pts=np.array(pts); u=(pts-cen)@t; d['ends'].append(sg.LineString([pts[np.argmin(u)],pts[np.argmax(u)]]))
+    d['abut']=shapely.unary_union([e.buffer(5.0) for e in d['ends']])
+    print('Brevard Road bridge %d: walled, ends %s m long'%(k,' and '.join('%.0f'%e.length for e in d['ends'])))
+    PV=shapely.unary_union([plan['G']]+[q['poly'] for q in plan['decks']]); shapely.prepare(PV)
+    for c,(h,pts,join) in BR_RAMPS.items():
+        xy=ic_centre(pts,PV); xy[0]=np.asarray(pts[0],float)
+        chains[c]={'xy':xy,'br':join or True,'hw':h,'sig':45.0,'cls':'motorway','decks':[]}
+    for p in BR_DROP:
+        c=min((c for c in chains if c.startswith('x')),key=lambda c:sg.LineString(chains[c]['xy']).distance(sg.Point(*p)))
+        if sg.LineString(chains[c]['xy']).distance(sg.Point(*p))<5.0: print('Brevard Road: today\'s ramp',c,'dropped'); del chains[c]
+def br_profiles(chains,cls,plan):
+    """the ramps: level with Brevard Road for their first 20 m, then a straight grade to the road their far end joins"""
+    k=plan['br_deck']; rider=max(cls,key=lambda c:int((cls[c]['st']==k).sum()))
+    def z_at(c,p): j=int(np.argmin(np.hypot(*(cls[c]['P']-p).T))); return float(cls[c]['z'][j])
+    for c,(h,pts,join) in BR_RAMPS.items():
+        d=cls[c]; s_=d['s']; z0=z_at(rider,d['P'][0])
+        if join: z1=z_at(join,d['P'][-1])
+        else:
+            near=[o for o in cls if not chains[o].get('br') and not chains[o].get('ic') and o!=rider
+                  and (o.startswith('e_') or chains[o].get('cls')=='motorway')]
+            o=min(near,key=lambda o:np.hypot(*(cls[o]['P']-d['P'][-1]).T).min()); z1=z_at(o,d['P'][-1]); join=o
+        d['z']=gs(np.interp(s_,[0,20,s_[-1]],[z0,z0,z1]),12.0)
+        print('Brevard Road ramp %s: %.1f m at Brevard Road (%s) to %.1f m at %s, %.0f m, grade %.1f%%'%(c,z0,rider,z1,join,s_[-1],100*abs(z0-z1)/max(s_[-1]-20,1)))
+def br_pave_under(plan,cls):
+    """I-26 paved through under the Brevard Road bridge: the plan's carriageways carried straight across its outline"""
+    k=plan['br_deck']; D=plan['decks'][k]['poly']; G=plan['G']; shapely.prepare(G); cen=np.array(D.centroid.coords[0])
+    # (along the bridge's ends, which follow the new carriageways' edges: today's I-26 runs 8 degrees off them here)
+    t=np.zeros(2)
+    for e in plan['decks'][k]['ends']:
+        q=np.array(e.coords[-1])-np.array(e.coords[0]); q=q/np.hypot(*q); t+=q if q@t>=0 else -q
+    t=t/np.hypot(*t); n=np.array([-t[1],t[0]])
+    u=(np.array(D.exterior.coords)-cen)@n; segs=[]
+    for o in np.arange(u.min(),u.max()+0.25,0.5):
+        X=sg.LineString([cen+n*o-t*300,cen+n*o+t*300]).intersection(D)
+        for g in getattr(X,'geoms',[X]):
+            if g.geom_type!='LineString' or g.length<0.5: continue
+            a,b=np.array(g.coords[0]),np.array(g.coords[-1])
+            if (b-a)@t<0: a,b=b,a
+            if all(G.contains(sg.Point(*q)) for q in (a-t*2.5,a-t*5.0,b+t*2.5,b+t*5.0)): segs.append(g)
+    if not segs: return
+    fill=polyonly(shapely.unary_union([g.buffer(0.3,cap_style=2) for g in segs]).buffer(0.6).buffer(-0.6).intersection(D.buffer(0.5)))
+    merge_fill(plan,list(getattr(G,'geoms',[G])),polyonly(fill.difference(G)),D.buffer(5.0))
+    print('Brevard Road bridge: I-26 paved through under it, %.0f m2'%fill.area)
 def add_axis_chains(chains,plan,cls):
     """a bridge nobody rides: bend the nearest parallel local road onto its long axis so it crosses on the bridge"""
     riders=set()
@@ -798,22 +872,9 @@ def add_axis_chains(chains,plan,cls):
         cid=best[1]; P=cls[cid]['P'].copy(); al=(P-cen)@a; lat=(P-cen)@nrm
         u=np.clip((np.abs(al)-(L/2+15))/110.0,0,1); w=1-u*u*(3-2*u)
         P=P-np.outer(lat*w,nrm)
-        # lengthen the bridge over any roadway that crosses just beyond its drawn ends
-        E=(np.array(d['poly'].exterior.coords)-cen); wd=(E@nrm).max()-(E@nrm).min(); lo,hi=-L/2,L/2
-        from scipy.spatial import cKDTree
-        mw=np.vstack([cls[c2]['P'] for c2 in cls if c2.startswith('e_') or chains[c2].get('cls')=='motorway'])
-        mt=cKDTree(mw); Gp=plan['G']
-        for sgn in (-1,1):
-            for t in np.arange(1.0,41.0,2.0):
-                q=[cen+a*sgn*(L/2+t)+nrm*s2*(wd/2+10) for s2 in (-1,1)]
-                if all(Gp.contains(sg.Point(*x)) for x in q) and max(mt.query(q)[0])<26:
-                    if sgn>0: hi=L/2+t-1
-                    else: lo=-(L/2+t-1)
-        for c0,pt in BRIDGE_REACH:      # manual: roadways known to pass under this bridge
-            if np.hypot(*(cen-np.array(c0)))<40: t=(np.array(pt)-cen)@a; lo=min(lo,t); hi=max(hi,t)
-        if hi>L/2 or lo<-L/2:
-            ext=sg.Polygon([cen+a*lo-nrm*wd/2,cen+a*hi-nrm*wd/2,cen+a*hi+nrm*wd/2,cen+a*lo+nrm*wd/2])
-            d['poly']=shapely.unary_union([d['poly'],ext]).buffer(0.5).buffer(-0.5); d['abut']=end_zones(d['poly']); print('bridge',k,'lengthened to',round(hi-lo),'m from',round(L))
+        # (the bridge keeps the outline the 2018 design draws: lengthening it over the roads just beyond its ends put the
+        # Brevard Road bridge 47 m longer than drawn, over the ramp junctions; see BR_DECK)
+        lo,hi=-L/2,L/2
         al=(P-cen)@a
         if al[0]>al[-1]: P=P[::-1]; al=al[::-1]
         if al[0]>lo-40: P=np.vstack([cen+a*(lo-60),P[al>lo+5]])
@@ -884,7 +945,7 @@ def load_all():
             if g.geom_type=='LineString' and g.length>60: chains[f'x{n}']={'xy':np.array(g.coords),'sig':45.0,'sig_ex':30.0,'cls':r['cls']}; n+=1
     print('x chains',n)
     freeway_over(plan,chains)
-    plan['G']=G; pave_between_edges(plan,chains); pave_ramp_gaps(plan,chains); ic_build(plan,chains)
+    plan['G']=G; pave_between_edges(plan,chains); pave_ramp_gaps(plan,chains); ic_build(plan,chains); br_build(plan,chains)
     pickle.dump(plan,open(W+'/sheets_plan2.pkl','wb'))
     return plan,chains
 if __name__=='__main__':
@@ -893,7 +954,7 @@ if __name__=='__main__':
     plan=trim_spurs(plan,cls)
     chains=add_axis_chains(chains,plan,cls); cls=classify(chains,plan,noride={'b1','b10'},straddle=hw)
     plan,cls=split_stacked(chains,plan,cls)
-    plan=patch_plan(chains,plan,cls); pickle.dump(plan,open(W+'/sheets_plan2.pkl','wb'))
+    plan=patch_plan(chains,plan,cls); br_pave_under(plan,cls); pickle.dump(plan,open(W+'/sheets_plan2.pkl','wb'))
     cls=design2(chains,plan,cls,verbose=True)
     plan=join_decks(chains,plan,cls); plan=fill_notches(chains,plan,cls); pickle.dump(plan,open(W+'/sheets_plan2.pkl','wb'))
     pickle.dump({'chains':chains,'cls':cls},open(W+'/profiles.pkl','wb'))

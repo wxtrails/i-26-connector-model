@@ -134,6 +134,10 @@ def stage_roads(surf):
                     z2=surf.z_on(i2,Q+np.array(r_)); hit|=np.isfinite(z2)&(z2<zref-2.0)
             return hit
         low=over_deck(pp,zd) if near else np.zeros(len(pp),bool); nlow+=int(low.sum())
+        # a bridge standing on walls at its ends (profiles2.BR_DECK) rests on them: columns only well clear of the walls
+        # (in the median of the road it spans), and no straddle bents
+        walled=plan['decks'][s['deck']].get('walled')
+        if walled: low|=shapely.distance(shapely.unary_union(plan['decks'][s['deck']]['ends']),shapely.points(pp))<6.0
         placed=[]
         for p_,a_,b_,g_,l_ in zip(pp,zt,zd,gm,low):
             if l_: continue
@@ -142,7 +146,7 @@ def stage_roads(surf):
         # where the bridge runs over a road there is no room for a column under it: straddle bents instead, a cap
         # beam across the bridge on two columns standing clear of the pavement on either side
         R_=riders.get(s['deck'])
-        if R_:
+        if R_ and not walled:
             RP=np.vstack(R_); rt=cKDTree(RP)
             for p_,a_,b_,g_,l_ in zip(pp,zt,zd,gm,low):
                 if l_ or g_ or not np.isfinite(b_) or b_-a_<4.5 or any(np.hypot(*(p_-q))<30.0 for q in placed): continue

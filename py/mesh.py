@@ -40,6 +40,19 @@ def tri_poly(poly,maxarea):
 def build(plan,maxarea_g=45,maxarea_d=30):
     sheets=[]   # dict(kind, id, poly, verts, tris)
     G=plan['G']
+    # pavement meets the end of a bridge standing on walls (profiles2.BR_DECK) at the wall: cut it there (and 12 m on
+    # each way, as far as the fill behind the wall reaches), so the road under the bridge and the road carrying on behind
+    # the wall are separate sheets that take their own levels, with a clean step at the wall instead of a slope
+    cut=[]
+    for d in plan['decks']:
+        for E in (d.get('ends',[]) if d.get('walled') else []):
+            a,b=np.array(E.coords[0]),np.array(E.coords[-1]); e=(b-a)/E.length; cut.append(sg.LineString([a-e*12.0,b+e*12.0]).buffer(0.02,cap_style=2))
+    if cut:     # (only the pieces it crosses: re-cutting all of G reorders vertices and re-meshes pavement far from here)
+        K=shapely.unary_union(cut); parts=[]
+        for g in (G.geoms if hasattr(G,'geoms') else [G]):
+            if not g.intersects(K): parts.append(g); continue
+            r=g.difference(K); parts+=[q for q in getattr(r,'geoms',[r]) if q.geom_type=='Polygon']
+        G=sg.MultiPolygon(parts)
     for g in (G.geoms if hasattr(G,'geoms') else [G]):
         if g.area<30: continue
         r=tri_poly(g,maxarea_g)
