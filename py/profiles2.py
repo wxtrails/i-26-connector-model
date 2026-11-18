@@ -580,18 +580,67 @@ def pave_between_edges(plan,chains):
             print('cleared %.0f m2 of pavement beside the new carriageways at'%q.intersection(RM).area,np.round(q.representative_point().coords[0]))
         fill=polyonly(zone.difference(DU.buffer(0.1)).buffer(-0.3).buffer(0.3))
         fill=polyonly(fill.difference(sg.MultiPolygon(parts)))
-        # merge into the pieces it touches only; the rest of G stays exactly as it was (a full re-union reorders vertices,
-        # which shifts later simplified outlines, such as the fine-terrain tile set, far from here)
-        near=[q.intersects(fill.buffer(0.5)) for q in parts]
-        m=shapely.unary_union([q for q,t in zip(parts,near) if t]+[fill]); m=[q for q in getattr(m,'geoms',[m]) if q.geom_type=='Polygon']
-        # (slivers left where a cleared piece met the new pavement)
-        m=[sg.Polygon(q.exterior,[h for h in q.interiors if not (sg.Polygon(h).area<20 and box.contains(sg.Polygon(h)))]) for q in m]
-        i0=near.index(True) if any(near) else len(parts)
-        plan['G']=sg.MultiPolygon([q for q,t in zip(parts[:i0],near[:i0]) if not t]+m+[q for q,t in zip(parts[i0:],near[i0:]) if not t])
+        merge_fill(plan,parts,fill,box)
         # for marks.py: lines inside the zone are kept to its pavement, and where the plan sheets' edges govern, the
         # KMZ's own edge lines (3 m away) are left out
         plan.setdefault('eot_fill',[]).append({'zone':zone.difference(DU),'pdf':shapely.unary_union(qp).difference(DU) if qp else sg.Polygon()})
         print('paved %.0f m2 between edge lines along'%fill.area,c,'in',bx,'(plan sheets\' lines from %.0f m along it)'%s0)
+def merge_fill(plan,parts,fill,box):
+    """merge new pavement into the pieces of G it touches only; the rest of G stays exactly as it was (a full re-union
+    reorders vertices, which shifts later simplified outlines, such as the fine-terrain tile set, far from here)"""
+    near=[q.intersects(fill.buffer(0.5)) for q in parts]
+    m=shapely.unary_union([q for q,t in zip(parts,near) if t]+[fill]); m=[q for q in getattr(m,'geoms',[m]) if q.geom_type=='Polygon']
+    # (slivers left where a cleared piece met the new pavement)
+    m=[sg.Polygon(q.exterior,[h for h in q.interiors if not (sg.Polygon(h).area<20 and box.contains(sg.Polygon(h)))]) for q in m]
+    i0=near.index(True) if any(near) else len(parts)
+    plan['G']=sg.MultiPolygon([q for q,t in zip(parts[:i0],near[:i0]) if not t]+m+[q for q,t in zip(parts[i0:],near[i0:]) if not t])
+# (ramp's plan alignment, box): ramps whose first stretch the 2018 KMZ leaves unpaved though the plan sheets draw its
+# edge-of-travel lines; it is paved between them, the shoulders widening to meet the KMZ pavement it runs into
+RAMP_FILL=[('b12',(284940,208350,284990,208500))]     # exit from I-26 West / I-240 East to Haywood Road: first 130 m
+def pave_ramp_gaps(plan,chains):
+    LY=pickle.load(open(W+'/pdf_layers.pkl','rb'))
+    PE=[np.asarray(it[1] if isinstance(it,tuple) else it,float) for it in LY.get(('Prop EOT','s'),[])]
+    for c,bx in RAMP_FILL:
+        box=sg.box(*bx); G=plan['G']; parts=list(getattr(G,'geoms',[G]))
+        EU=shapely.unary_union([sg.LineString(l) for l in PE if len(l)>1 and sg.LineString(l).intersects(box.buffer(20))])
+        s_,P=resample(chains[c]['xy'],2.0); t=np.gradient(P,axis=0); t/=np.hypot(t[:,0],t[:,1])[:,None]+1e-9; nv=np.c_[-t[:,1],t[:,0]]
+        sec={}; strip={}
+        for i in range(len(P)):
+            if not box.contains(sg.Point(*P[i])): continue
+            X=sg.LineString([P[i]-nv[i]*12,P[i]+nv[i]*12]).intersection(EU)
+            o=sorted(float((np.array(g.coords[0])-P[i])@nv[i]) for g in getattr(X,'geoms',[X]) if g.geom_type=='Point')
+            a=[v for v in o if -1.5<v<4]                 # the ramp's left edge, next to its alignment
+            if not a: continue
+            a=min(a,key=abs); b=[v for v in o if a-10<v<a-4]
+            if not b: continue
+            g_=[v for v in o if a<v<=a+4]                # the gore, paved up to where the through road's edge is 4 m away
+            # past the gore's nose: where two plan sheets draw the through road's edge up to 2.5 m apart, pave between
+            th=[v for v in o if v>a+4][:2]
+            strip[i]=(th[0],th[1]) if not g_ and len(th)==2 and th[1]-th[0]<2.5 else None
+            sec[i]=(max(g_) if g_ else a,a,max(b))
+        if len(sec)<2: continue
+        if min(sec)>0: sec[min(sec)-1]=sec[min(sec)]          # (back over the station where the edge lines start)
+        for i in sorted(k for k in strip if strip[k] and not strip.get(k-1)): strip[i-1]=strip[i-2]=strip[i]   # (and its start)
+        ii=sorted(sec); i1=ii[-1]
+        # shoulders of the pavement it runs into, measured across its last station
+        X=sg.LineString([P[i1]-nv[i1]*15,P[i1]+nv[i1]*15]).intersection(G); mid=P[i1]+nv[i1]*(sec[i1][1]+sec[i1][2])/2
+        sl=sr=0.0
+        for g in getattr(X,'geoms',[X]):
+            if g.geom_type=='LineString' and g.distance(sg.Point(*mid))<0.1:
+                e=sorted(float((np.array(q)-P[i1])@nv[i1]) for q in g.coords)
+                sl=float(np.clip(e[-1]-sec[i1][1],0,4)); sr=float(np.clip(sec[i1][2]-e[0],0,4))
+        quads=[]
+        for i,j in zip(ii[:-1],ii[1:]):
+            if j!=i+1: continue
+            w=[(s_[k]-s_[ii[0]])/max(s_[i1]-s_[ii[0]],1e-9) for k in (i,j)]
+            L=[max(sec[k][0],sec[k][1]+wk*sl) for k,wk in zip((i,j),w)]; R_=[sec[k][2]-wk*sr for k,wk in zip((i,j),w)]
+            quads.append(sg.Polygon([P[i]+nv[i]*L[0],P[j]+nv[j]*L[1],P[j]+nv[j]*R_[1],P[i]+nv[i]*R_[0]]).buffer(0.05))
+            if strip.get(i) and strip.get(j):
+                u,v=strip[i],strip[j]; quads.append(sg.Polygon([P[i]+nv[i]*u[0],P[j]+nv[j]*v[0],P[j]+nv[j]*v[1],P[i]+nv[i]*u[1]]).buffer(0.05))
+        fill=polyonly(shapely.unary_union(quads).buffer(-0.3).buffer(0.3))
+        fill=polyonly(fill.difference(sg.MultiPolygon(parts)))
+        merge_fill(plan,parts,fill,box)
+        print('paved %.0f m2 of ramp between edge lines along'%fill.area,c,'in',bx,'(shoulders to %.1f / %.1f m)'%(sl,sr))
 def add_axis_chains(chains,plan,cls):
     """a bridge nobody rides: bend the nearest parallel local road onto its long axis so it crosses on the bridge"""
     riders=set()
@@ -697,7 +746,7 @@ def load_all():
             if g.geom_type=='LineString' and g.length>60: chains[f'x{n}']={'xy':np.array(g.coords),'sig':45.0,'sig_ex':30.0,'cls':r['cls']}; n+=1
     print('x chains',n)
     freeway_over(plan,chains)
-    plan['G']=G; pave_between_edges(plan,chains)
+    plan['G']=G; pave_between_edges(plan,chains); pave_ramp_gaps(plan,chains)
     pickle.dump(plan,open(W+'/sheets_plan2.pkl','wb'))
     return plan,chains
 if __name__=='__main__':
