@@ -97,8 +97,11 @@ def stage_roads(surf):
             nopen+=int((cont&~open_).sum()); open_|=cont
             for k in range(len(pts)-1):
                 a,b=pts[k],pts[k+1]; za,zb=zz[k],zz[k+1]
-                # side skirt (always)
-                q=toscene([a[0],b[0],b[0],a[0]],[a[1],b[1],b[1],a[1]],[za+0.02,zb+0.02,zb-1.7,za-1.7])
+                # side skirt (always); where the deck carries on (no barrier: a joint to the next piece of the bridge or
+                # to the pavement at its end), its top stays 0.25 m under the surface, below the other side of the joint
+                # (joints step by up to 0.15 m), so it draws no dark line across the lanes
+                tp=-0.25 if open_[k] else 0.02
+                q=toscene([a[0],b[0],b[0],a[0]],[a[1],b[1],b[1],a[1]],[za+tp,zb+tp,zb-1.7,za-1.7])
                 SP.append(q); SI.append(np.array([[0,1,2],[0,2,3]])+n); n+=4
                 if not open_[k]:
                     # parapet: inset 0.25 m, 0.25 wide, 0.95 high

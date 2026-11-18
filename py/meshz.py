@@ -9,9 +9,13 @@ def run(planfile='/sheets_plan2.pkl'):
     off=np.cumsum([0]+[len(s['v']) for s in sheets]); XY=np.vstack([s['v'] for s in sheets])
     sid=np.concatenate([np.full(len(s['v']),i) for i,s in enumerate(sheets)])
     zt=M.terr(XY[:,0],XY[:,1]); z=zt.copy()
-    groups={}
+    groups={}; runs={}
     for c,d in cls.items():
         st=d['st']; on=st>=0
+        t=np.gradient(d['P'],axis=0); t/=np.hypot(t[:,0],t[:,1])[:,None]+1e-9
+        # where each ground-level stretch starts and ends, to tell a point beside a road's ground stretch from one past
+        # its end (I-26 is 44 m wide: by distance alone, pavement under its bridge 20 m before it touches down is "inside")
+        g=st==-1; runs[c]=(np.where(g)[0],d['P'],t,np.r_[True,~g[:-1]],np.r_[~g[1:],True])
         for k in np.unique(st):
             m=st==k
             if k>=0:
@@ -51,7 +55,16 @@ def run(planfile='/sheets_plan2.pkl'):
             d,j=tree.query(P,distance_upper_bound=400.0 if key>=0 else 60.0)
             ok=np.isfinite(d)
             if key<0 and gi>=len(gl): ok&=~under
-            D[gi,ok]=d[ok]; Zc[gi,ok]=zz[j[ok]]; Mr[gi,ok]=d[ok]/hw(c,chains); Ed[gi,ok]=np.maximum(d[ok]-hw(c,chains),0.0); Er[gi,ok]=Ed[gi,ok]
+            D[gi,ok]=d[ok]; Zc[gi,ok]=zz[j[ok]]; Mr[gi,ok]=d[ok]/hw(c,chains); Ed[gi,ok]=np.maximum(d[ok]-hw(c,chains),0.0)
+            if key<0 and gi<len(gl):
+                # ground pavement well past the end of a road's ground stretch (where it goes onto a bridge, or ends) is not inside
+                # that road's carriageway, however wide the road: it counts as outside by however far it lies beyond
+                # 10 m (a skewed joint leaves the road's own pavement up to about that far past its centreline's
+                # transition), so a road passing under the bridge whose carriageway holds it takes it
+                ix,PP,tt,first,last=runs[c]; i_=ix[j[ok]]; a_=np.einsum('ij,ij->i',P[ok]-PP[i_],tt[i_])
+                past=np.where(first[i_]&(a_<0),-a_,0.0)+np.where(last[i_]&(a_>0),a_,0.0)
+                Ed[gi,ok]=np.maximum(Ed[gi,ok],past-10.0)
+            Er[gi,ok]=Ed[gi,ok]
             # ground-level pavement next to a bridge is a ground-level road's unless none is within 8 m of it
             if key<0 and gi>=len(gl): Ed[gi,ok]+=8.0
         if len(cand):

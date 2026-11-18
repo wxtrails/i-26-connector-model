@@ -43,36 +43,75 @@ class Picker:
         res=[self.near(P[i],t[i]) if n[i]>1e-6 else None for i in range(len(P))]
         st=np.array([-2 if r_ is None else r_[0] for r_ in res]); zr=np.array([np.nan if r_ is None else self.Z[r_[1]] for r_ in res])
         # no flicker: stretches shorter than 3 vertices take the status of the stretch before them
+        st0=st.copy()
         for _ in range(2):
             b=np.r_[0,np.where(np.diff(st)!=0)[0]+1,len(st)]
             for a_,b_ in zip(b[:-1],b[1:]):
                 if b_-a_<3 and a_>0: st[a_:b_]=st[a_-1]
+        # ...and the level of the road they now belong to, from the vertices either side (not the other road's level)
+        ch=st!=st0; ok=~ch&np.isfinite(zr)
+        if ch.any():
+            s=np.r_[0,np.cumsum(np.hypot(*np.diff(P,axis=0).T))]
+            zr=zr.copy(); zr[ch]=np.interp(s[ch],s[ok],zr[ok]) if ok.any() else np.nan
         z=np.full(len(P),np.nan); b=np.r_[0,np.where(np.diff(st)!=0)[0]+1,len(st)]
         for a_,b_ in zip(b[:-1],b[1:]):
             lo,hi=max(0,a_-1),min(len(P),b_+1)     # overlap one vertex so the pieces join
             zz=self._z(P[lo:hi],None if st[a_]==-2 else int(st[a_]),zr[lo:hi])
             seg=z[lo:hi]; m=np.isnan(seg); seg[m]=zz[m]; z[lo:hi]=seg
+        # where no surface at the line's own road's level lies under it (it runs off the pavement's edge, or under a
+        # bridge where the lower road's pavement is missing), it carries on at that road's level: its height above the
+        # road's profile is interpolated from the vertices either side, so it neither climbs onto the deck overhead nor
+        # drops to the ground below
+        # (straight across between those two heights instead where the road it is matched to changes level within the
+        # gap: a line between two roads at different levels must not step from one to the other)
+        gap=np.isnan(z)&np.isfinite(zr)
+        if gap.any():
+            s=np.r_[0,np.cumsum(np.hypot(*np.diff(P,axis=0).T))]; ok=np.isfinite(z); okr=ok&np.isfinite(zr)
+            idx=np.where(gap)[0]
+            for g_ in np.split(idx,np.where(np.diff(idx)>1)[0]+1):
+                a_,b_=g_[0]-1,g_[-1]+1; lo,hi=max(a_,0),min(b_,len(P)-1)
+                smooth=np.all(np.abs(np.diff(zr[lo:hi+1]))<1.0) if np.isfinite(zr[lo:hi+1]).all() else False
+                if smooth and okr.any(): z[g_]=zr[g_]+np.interp(s[g_],s[okr],(z-zr)[okr])
+                elif ok.any(): z[g_]=np.interp(s[g_],s[ok],z[ok])
+                elif smooth: z[g_]=zr[g_]      # (no pavement under any of it and no one road to follow: left out)
         return z
     def _z(self,P,st,zr=None):
         if len(P)<2: return self.surf.drape(P)[0]
-        cand=self.surf.cands(P); order=[]
+        cand=self.surf.cands(P); Z=np.array([self.surf.z_on(i,P) for i in cand]).reshape(len(cand),len(P)); order=[]
         if st is not None:
             pref=self.gs if st<0 else self.ds.get(st,[])
-            order=[i for i in cand if i in pref]
+            order=[k for k,i in enumerate(cand) if i in pref]
         z=np.full(len(P),np.nan)
-        for i in order:
-            zi=self.surf.z_on(i,P); mm=np.isnan(z)&np.isfinite(zi); z[mm]=zi[mm]
+        for k in order:
+            zi=Z[k]; mm=np.isnan(z)&np.isfinite(zi); z[mm]=zi[mm]
+        if zr is None or not np.isfinite(zr).any():
+            return self._z_old(P,st,z)
+        # the surface at the level of the road the line belongs to (zr: that road's profile height): taken where the
+        # preferred sheet is missing, or where it lies at another level and a surface at the road's own level is there
+        # (a line on the lower deck of a stacked crossing keeps to it; the flyover overhead is never its surface)
+        lev=np.where(np.isfinite(Z),np.abs(Z-zr[None,:]),np.inf); kb=lev.argmin(0) if len(cand) else np.zeros(len(P),int)
+        db=lev[kb,np.arange(len(P))] if len(cand) else np.full(len(P),np.inf); zb=Z[kb,np.arange(len(P))] if len(cand) else z
+        nz=~np.isfinite(zr)
+        use=(np.isnan(z)&(db<=2.5))|(np.isfinite(z)&(np.abs(z-zr)>2.5)&(db<=1.5))
+        z[use]=zb[use]
+        # off every sheet: the nearest pavement vertex within 7 m at the road's level, of the preferred sheet first
+        for tree,zv in ([self.vt[st]] if st is not None and st in self.vt else [])+[self.vall]:
+            mm=np.isnan(z)&~nz
+            if not mm.any(): break
+            d,j=tree.query(P[mm],k=12,distance_upper_bound=7.0); zr_=zr[mm][:,None]
+            zz=np.where(np.isfinite(d),zv[np.minimum(j,len(zv)-1)],np.nan); good=np.isfinite(zz)&(np.abs(zz-zr_)<=2.5)
+            first=good.argmax(1); hit=good.any(1); idx=np.where(mm)[0][hit]; z[idx]=zz[hit,first[hit]]
+        if (np.isnan(z)&nz).any():       # vertices with no road nearby: as before
+            zo=self._z_old(P,st,z); m=np.isnan(z)&nz; z[m]=zo[m]
+        return z      # still nan: no surface at the road's level within reach (z() carries the line across)
+    def _z_old(self,P,st,z):
+        """heights with no road level to go by: nearest preferred vertex, then whatever surface lies under the line"""
+        z=z.copy()
         if np.isnan(z).any() and st is not None and st in self.vt:
             mm=np.isnan(z); d,j=self.vt[st][0].query(P[mm],distance_upper_bound=7.0); ok=np.isfinite(d)
             idx=np.where(mm)[0][ok]; z[idx]=self.vt[st][1][j[ok]]
         if np.isnan(z).any():
-            z2,_=self.surf.drape(P); mm=np.isnan(z)
-            if st is not None and st<0 and zr is not None:
-                # a ground-level road's line with no ground pavement under it (a barrier along the edge of a road that
-                # passes under a bridge, where the plan's pavement stops short of it): when the only surface there is
-                # the deck overhead, it stays at the height of the road it runs along
-                off=mm&np.isfinite(z2)&np.isfinite(zr)&(z2>np.nan_to_num(zr)+2.5); z[off]=zr[off]; mm&=~off
-            z[mm]=z2[mm]
+            z2,_=self.surf.drape(P); mm=np.isnan(z); z[mm]=z2[mm]
         if np.isnan(z).any():
             mm=np.isnan(z); d,j=self.vall[0].query(P[mm],distance_upper_bound=7.0); ok=np.isfinite(d)
             idx=np.where(mm)[0][ok]; z[idx]=self.vall[1][j[ok]]
