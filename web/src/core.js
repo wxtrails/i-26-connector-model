@@ -63,7 +63,7 @@ const US={idx:{value:null},atl:{value:null},box:{value:new T.Vector4()},dim:{val
 // meets a deck share it and the shadow's edge stays smooth. Starting 3 m up keeps a deck from shading its own top. The
 // weight is worked out at the four nearest texels and then blended (usHit), never from a blended height, which across
 // the edge of an upper deck over a lower one would pass through heights neither deck has and draw a false line.
-const US_K=new T.Vector2(0.35,0.5), US_RISE=33;
+const US_K=new T.Vector2(0.45,0.65), US_RISE=33;
 const US_GLSL=`uniform sampler2D usIdx;uniform sampler2D usAtl;uniform vec4 usBox;uniform vec4 usDim;uniform vec2 usK;uniform vec2 usSun;varying vec3 usW;
 vec2 usAt(vec2 xz){vec2 g=(xz-usBox.xy)/usBox.z;
 if(g.x<0.0||g.y<0.0||g.x>=usDim.x||g.y>=usDim.y) return vec2(0.0,-1e4);
