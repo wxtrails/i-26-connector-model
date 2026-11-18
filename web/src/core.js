@@ -51,6 +51,100 @@ else c=hor;gl_FragColor=vec4(c,1.0);}`});
 const sun=new T.DirectionalLight(0xfff3dc,2.5); sun.position.copy(sunDir).multiplyScalar(1000); scene.add(sun);
 scene.add(new T.HemisphereLight(0xd6e6ff,0x7a776a,1.45));
 
+// ---------- shadows of bridges. Every deck is drawn into a soft footprint (1 m texels in 32 m tiles, packed into an
+// atlas where there are decks; filled in by buildUnderShade further down) holding how much deck is there and its
+// height. A surface on the materials passed through underShade() (the ground, roads, lower decks, piers, cars) is
+// darkened by US_K.x where a deck is well above it (sky blocked) and by US_K.y where a deck blocks the sun (found by
+// stepping up the ray toward the sun). Anywhere else the factor is exactly 1, so the rest of the scene is untouched.
+const US={idx:{value:null},atl:{value:null},box:{value:new T.Vector4()},dim:{value:new T.Vector4(1,1,1,1)},k:{value:new T.Vector2()},
+  sun:{value:new T.Vector2(sunDir.x/sunDir.y,sunDir.z/sunDir.y)}};
+// The sun test steps 3 m at a time up the ray toward the sun, to 33 m above the surface. Each step weighs in by how close
+// the ray is to the middle of the deck slab there (a tent 3 m each way), so the two steps either side of where the ray
+// meets a deck share it and the shadow's edge stays smooth. Starting 3 m up keeps a deck from shading its own top. The
+// weight is worked out at the four nearest texels and then blended (usHit), never from a blended height, which across
+// the edge of an upper deck over a lower one would pass through heights neither deck has and draw a false line.
+const US_K=new T.Vector2(0.35,0.5), US_RISE=33;
+const US_GLSL=`uniform sampler2D usIdx;uniform sampler2D usAtl;uniform vec4 usBox;uniform vec4 usDim;uniform vec2 usK;uniform vec2 usSun;varying vec3 usW;
+vec2 usAt(vec2 xz){vec2 g=(xz-usBox.xy)/usBox.z;
+if(g.x<0.0||g.y<0.0||g.x>=usDim.x||g.y>=usDim.y) return vec2(0.0,-1e4);
+vec4 c=texture2D(usIdx,(floor(g)+0.5)/usDim.xy); if(c.b<0.5) return vec2(0.0,-1e4);
+vec2 s=texture2D(usAtl,(floor(c.rg*255.0+0.5)*usBox.w+fract(g)*(usBox.w-2.0)+1.0)/usDim.zw).rg; return vec2(s.r,s.g+500.0);}
+float usW1(vec2 s,float yr){return s.x*max(0.0,1.0-abs(yr-s.y-500.0+0.85)/3.0);}
+float usHit(vec2 xz,float yr){vec2 g=(xz-usBox.xy)/usBox.z;
+if(g.x<0.0||g.y<0.0||g.x>=usDim.x||g.y>=usDim.y) return 0.0;
+vec4 c=texture2D(usIdx,(floor(g)+0.5)/usDim.xy); if(c.b<0.5) return 0.0;
+vec2 t=floor(c.rg*255.0+0.5)*usBox.w+fract(g)*(usBox.w-2.0)+0.5; ivec2 b=ivec2(floor(t)); vec2 f=fract(t);
+return mix(mix(usW1(texelFetch(usAtl,b,0).rg,yr),usW1(texelFetch(usAtl,b+ivec2(1,0),0).rg,yr),f.x),
+mix(usW1(texelFetch(usAtl,b+ivec2(0,1),0).rg,yr),usW1(texelFetch(usAtl,b+ivec2(1,1),0).rg,yr),f.x),f.y);}
+float usShade(){vec2 g=(usW.xz-usBox.xy)/usBox.z;
+if(usK.x+usK.y<=0.0||g.x<0.0||g.y<0.0||g.x>=usDim.x||g.y>=usDim.y) return 1.0;
+if(texture2D(usIdx,(floor(g)+0.5)/usDim.xy).a<0.5) return 1.0;
+vec2 a=usAt(usW.xz); float amb=a.x*smoothstep(1.5,5.0,a.y-usW.y), sun=0.0;
+for(int i=0;i<${Math.floor(US_RISE/3)};i++){float d=3.0+3.0*float(i); sun+=usHit(usW.xz+usSun*d,usW.y+d);}
+return 1.0-max(usK.x*amb,usK.y*min(sun,1.0));}`;
+function underShade(mat){
+  mat.onBeforeCompile=function(sh){
+    Object.assign(sh.uniforms,{usIdx:US.idx,usAtl:US.atl,usBox:US.box,usDim:US.dim,usK:US.k,usSun:US.sun});
+    sh.vertexShader=sh.vertexShader.replace('void main() {','varying vec3 usW;\nvoid main() {').replace('#include <project_vertex>',
+      '#include <project_vertex>\n{vec4 w_=vec4(transformed,1.0);\n#ifdef USE_INSTANCING\nw_=instanceMatrix*w_;\n#endif\nusW=(modelMatrix*w_).xyz;}');
+    sh.fragmentShader=sh.fragmentShader.replace('void main() {',US_GLSL+'\nvoid main() {').replace('#include <opaque_fragment>','#include <opaque_fragment>\ngl_FragColor.rgb*=usShade();');
+  };
+  return mat;
+}
+function buildUnderShade(p,ix){
+  const RES=1, N=32, TS=N*RES, PAD=6, S=N+2*PAD, CELL=N+2;      // a tile stores its 32 m plus a 6 m apron, enough for the blur
+  let x0=Infinity,z0=Infinity,x1=-Infinity,z1=-Infinity;
+  for(let k=0;k<p.length;k+=3){const x=p[k],z=p[k+2]; if(x<x0)x0=x; if(x>x1)x1=x; if(z<z0)z0=z; if(z>z1)z1=z;}
+  const NEAR=Math.ceil((US_RISE*Math.hypot(US.sun.value.x,US.sun.value.y)+PAD)/TS);   // tiles a sun shadow can reach
+  x0=Math.floor(x0/TS)*TS-(NEAR+1)*TS; z0=Math.floor(z0/TS)*TS-(NEAR+1)*TS;
+  const nx=Math.ceil((x1-x0)/TS)+NEAR+2, nz=Math.ceil((z1-z0)/TS)+NEAR+2, tiles=new Map();
+  for(let k=0;k<ix.length;k+=3){
+    const a=3*ix[k],b=3*ix[k+1],c=3*ix[k+2];
+    const ax=p[a],ay=p[a+1],az=p[a+2],bx=p[b],by=p[b+1],bz=p[b+2],cx=p[c],cy=p[c+1],cz=p[c+2];
+    const d=(bx-ax)*(cz-az)-(bz-az)*(cx-ax); if(Math.abs(d)<1e-9) continue;
+    const mnx=Math.min(ax,bx,cx),mxx=Math.max(ax,bx,cx),mnz=Math.min(az,bz,cz),mxz=Math.max(az,bz,cz);
+    for(let tz=Math.floor((mnz-z0-PAD*RES)/TS);tz<=Math.floor((mxz-z0+PAD*RES)/TS);tz++)
+    for(let tx=Math.floor((mnx-x0-PAD*RES)/TS);tx<=Math.floor((mxx-x0+PAD*RES)/TS);tx++){
+      const ox=x0+tx*TS-PAD*RES, oz=z0+tz*TS-PAD*RES;          // stored texel (i,j) is centred at ox+(i+.5)RES, oz+(j+.5)RES
+      const i0=Math.max(0,Math.ceil((mnx-ox)/RES-0.5)), i1=Math.min(S-1,Math.floor((mxx-ox)/RES-0.5));
+      const j0=Math.max(0,Math.ceil((mnz-oz)/RES-0.5)), j1=Math.min(S-1,Math.floor((mxz-oz)/RES-0.5));
+      if(i0>i1||j0>j1) continue;
+      let t=tiles.get(tz*nx+tx);
+      for(let j=j0;j<=j1;j++){const z=oz+(j+0.5)*RES;
+        for(let i=i0;i<=i1;i++){const x=ox+(i+0.5)*RES;
+          const u=((bx-x)*(cz-z)-(bz-z)*(cx-x))/d, v=((cx-x)*(az-z)-(cz-z)*(ax-x))/d, w=1-u-v;
+          if(u<-1e-4||v<-1e-4||w<-1e-4) continue;
+          if(!t){t={tx,tz,c:new Float32Array(S*S),h:new Float32Array(S*S).fill(-1e4)}; tiles.set(tz*nx+tx,t);}
+          const q=j*S+i, y=u*ay+v*by+w*cy; t.c[q]=1; if(y>t.h[q]) t.h[q]=y;}}
+    }
+  }
+  const list=[...tiles.values()], COLS=Math.ceil(Math.sqrt(list.length)), ROWS=Math.ceil(list.length/COLS), AW=COLS*CELL, AH=ROWS*CELL;
+  const HF=T.DataUtils.toHalfFloat, NOH=HF(-100), ad=new Uint16Array(AW*AH*2), id=new Uint8Array(nx*nz*4);
+  for(let k=1;k<ad.length;k+=2) ad[k]=NOH;
+  const tmp=new Float32Array(S*S);
+  const pass=(src,dst,r,st,mx)=>{           // 1-D box blur (mx false) or max filter (mx true) of radius r along rows (st 1) or columns (st S)
+    for(let j=0;j<S;j++)for(let i=0;i<S;i++){const q=st===1?j*S+i:i*S+j; let acc=mx?-1e4:0;
+      for(let o=-r;o<=r;o++){const ii=Math.min(S-1,Math.max(0,i+o)), v=src[st===1?j*S+ii:ii*S+j]; if(mx){if(v>acc)acc=v;}else acc+=v;}
+      dst[q]=mx?acc:acc/(2*r+1);}};
+  list.forEach((t,n)=>{
+    const col=n%COLS,row=Math.floor(n/COLS), c=t.c, h=t.h;
+    // coverage: two box blurs of radius 2 (a soft edge about 4 m each way); height: the decks' own height where there is
+    // deck, and beside it (where only the soft edge falls) the highest deck within 4 m
+    pass(c,tmp,2,1,false); pass(tmp,c,2,S,false); pass(c,tmp,2,1,false); pass(tmp,c,2,S,false);
+    const hd=new Float32Array(S*S); pass(h,tmp,4,1,true); pass(tmp,hd,4,S,true);
+    for(let j=0;j<CELL;j++)for(let i=0;i<CELL;i++){
+      const q=(j+PAD-1)*S+(i+PAD-1), o=((row*CELL+j)*AW+col*CELL+i)*2, hh=h[q]>-1e3?h[q]:hd[q];
+      ad[o]=HF(c[q]); ad[o+1]=hh>-1e3?HF(hh-500):NOH;}
+    const o=(t.tz*nx+t.tx)*4; id[o]=col; id[o+1]=row; id[o+2]=255;
+    // alpha marks every tile a deck's shadow can fall on, so the shader skips the ray test everywhere else
+    for(let dz=-NEAR;dz<=NEAR;dz++)for(let dx=-NEAR;dx<=NEAR;dx++){const tx=t.tx+dx,tz=t.tz+dz; if(tx>=0&&tz>=0&&tx<nx&&tz<nz) id[(tz*nx+tx)*4+3]=255;}
+  });
+  const at=new T.DataTexture(ad,AW,AH,T.RGFormat,T.HalfFloatType); at.magFilter=at.minFilter=T.LinearFilter; at.needsUpdate=true;
+  const it=new T.DataTexture(id,nx,nz); it.needsUpdate=true;
+  US.atl.value=at; US.idx.value=it; US.box.value.set(x0,z0,TS,CELL); US.dim.value.set(nx,nz,AW,AH); US.k.value.copy(US_K);
+  A.underShade={tiles:list.length,atlas:[AW,AH],grid:[nx,nz]};
+}
+
 // ---------- terrain
 const TR=M.terrain, terr={};
 (function(){
@@ -68,11 +162,11 @@ const TR=M.terrain, terr={};
   }
   const g=new T.BufferGeometry(); g.setAttribute('position',new T.BufferAttribute(pos,3)); g.setAttribute('uv',new T.BufferAttribute(uv,2)); g.setIndex(idx); g.computeVertexNormals();
   A.baseTex=loadTex('base');
-  terr.matCoarse=new T.MeshLambertMaterial({map:A.baseTex,color:0xffffff});
+  terr.matCoarse=underShade(new T.MeshLambertMaterial({map:A.baseTex,color:0xffffff}));
   scene.add(new T.Mesh(g,terr.matCoarse));
   // fine tiles, textured from atlases
   const AT=M.atlas, n1=fn, fs=TR.fine;
-  const mats=[]; for(let a=0;a<AT.n;a++) mats.push(new T.MeshLambertMaterial({map:loadTex('atlas'+a)}));
+  const mats=[]; for(let a=0;a<AT.n;a++) mats.push(underShade(new T.MeshLambertMaterial({map:loadTex('atlas'+a)})));
   const tidx=[]; for(let j=0;j<n1-1;j++)for(let i=0;i<n1-1;i++){const a=j*n1+i,b=a+1,c=a+n1,d=c+1;tidx.push(a,b,d,a,d,c);}
   const idxAttr=new T.BufferAttribute(new Uint16Array(tidx),1); const S=AT.cell*AT.per;
   for(let k=0;k<TR.ntiles;k++){
@@ -116,20 +210,30 @@ function meshFrom(pn,inn,mat){
   const m=new T.Mesh(g,mat); scene.add(m); return m;
 }
 (function(){
-  const matAsphalt=new T.MeshLambertMaterial({color:0x4b4d51,polygonOffset:true,polygonOffsetFactor:-1,polygonOffsetUnits:-2});
-  const matDeck=new T.MeshLambertMaterial({color:0xb4afa4});   // light concrete, as in the NCDOT renderings, so structures read apart from ground-level roads
-  const matConc=new T.MeshLambertMaterial({color:0xcfcbc1,side:T.DoubleSide});
-  const matWhite=new T.MeshBasicMaterial({color:0xecece4,polygonOffset:true,polygonOffsetFactor:-4,polygonOffsetUnits:-8});
-  const matYellow=new T.MeshBasicMaterial({color:0xe2b21c,polygonOffset:true,polygonOffsetFactor:-4,polygonOffsetUnits:-8});
+  const matAsphalt=underShade(new T.MeshLambertMaterial({color:0x4b4d51,polygonOffset:true,polygonOffsetFactor:-1,polygonOffsetUnits:-2}));
+  const matDeck=underShade(new T.MeshLambertMaterial({color:0xb4afa4}));   // light concrete, as in the NCDOT renderings, so structures read apart from ground-level roads
+  const matConc=underShade(new T.MeshLambertMaterial({color:0xcfcbc1,side:T.DoubleSide}));
+  const matWhite=underShade(new T.MeshBasicMaterial({color:0xecece4,polygonOffset:true,polygonOffsetFactor:-4,polygonOffsetUnits:-8}));
+  const matYellow=underShade(new T.MeshBasicMaterial({color:0xe2b21c,polygonOffset:true,polygonOffsetFactor:-4,polygonOffsetUnits:-8}));
   meshFrom('road_g_p','road_g_i',matAsphalt);
-  meshFrom('road_d_p','road_d_i',matDeck);
+  const deck=meshFrom('road_d_p','road_d_i',matDeck);
+  if(deck){
+    // the deck's underside: its top surface 1.7 m down (level with the foot of the side skirts), facing down, in a darker
+    // concrete grey, so a bridge is solid from below (the top surface is one-sided)
+    const p=deck.geometry.attributes.position.array, ix=deck.geometry.index.array;
+    const q=new Float32Array(p); for(let k=1;k<q.length;k+=3) q[k]-=1.7;
+    const r=new Uint32Array(ix.length); for(let k=0;k<ix.length;k+=3){r[k]=ix[k];r[k+1]=ix[k+2];r[k+2]=ix[k+1];}
+    const g=new T.BufferGeometry(); g.setAttribute('position',new T.BufferAttribute(q,3)); g.setIndex(new T.BufferAttribute(r,1));
+    scene.add(new T.Mesh(g,new T.MeshBasicMaterial({color:0x6e6c68})));
+    buildUnderShade(p,ix);
+  }
   meshFrom('deck_side_p','deck_side_i',matConc);
   meshFrom('deck_par_p','deck_par_i',matConc);
-  meshFrom('conc_p','conc_i',matConc); meshFrom('wall_p','wall_i',new T.MeshLambertMaterial({color:0xa9a59b,side:T.DoubleSide}));
-  meshFrom('fill_p','fill_i',new T.MeshLambertMaterial({color:0x76895a}));   // graded fill between adjacent roads at different levels
+  meshFrom('conc_p','conc_i',matConc); meshFrom('wall_p','wall_i',underShade(new T.MeshLambertMaterial({color:0xa9a59b,side:T.DoubleSide})));
+  meshFrom('fill_p','fill_i',underShade(new T.MeshLambertMaterial({color:0x76895a})));   // graded fill between adjacent roads at different levels
   // sidewalks (red in the plans) and multi-use paths (purple), raised a curb's height beside the road
-  meshFrom('walk_p','walk_i',new T.MeshLambertMaterial({color:0xc4c0b6,side:T.DoubleSide,polygonOffset:true,polygonOffsetFactor:-1,polygonOffsetUnits:-2}));
-  meshFrom('mup_p','mup_i',new T.MeshLambertMaterial({color:0xd2c6ae,side:T.DoubleSide,polygonOffset:true,polygonOffsetFactor:-1,polygonOffsetUnits:-2}));
+  meshFrom('walk_p','walk_i',underShade(new T.MeshLambertMaterial({color:0xc4c0b6,side:T.DoubleSide,polygonOffset:true,polygonOffsetFactor:-1,polygonOffsetUnits:-2})));
+  meshFrom('mup_p','mup_i',underShade(new T.MeshLambertMaterial({color:0xd2c6ae,side:T.DoubleSide,polygonOffset:true,polygonOffsetFactor:-1,polygonOffsetUnits:-2})));
   meshFrom('mk_w_p','mk_w_i',matWhite); meshFrom('syn_w_p','syn_w_i',matWhite); meshFrom('syn_y_p','syn_y_i',matYellow); meshFrom('mk_y_p','mk_y_i',matYellow);
   const P=buf('piers'); if(P){ const n=P.length/4;
     const g=new T.CylinderGeometry(1.1,1.1,1,10); g.translate(0,0.5,0);

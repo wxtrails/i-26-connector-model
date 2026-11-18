@@ -35,14 +35,14 @@ const VT=[
 ];
 const CAR_COLS=[0xf2f2f2,0xd9dadb,0x9da2a6,0x55585c,0x1c1d1f,0x1c1d1f,0xf2f2f2,0x8c1c1c,0x1f3f7a,0x2c5d8f,0x6b7f5a,0xb9b2a0,0x7a1f2b,0x3a3f44,0xc8cdd2,0xc4622d];
 const MAXV=480;
-VT.forEach(t=>{const G=[]; t.mk(G); t.geom=mergeGeoms(G); t.mesh=new T.InstancedMesh(t.geom,new T.MeshLambertMaterial({vertexColors:true}),MAXV); t.mesh.count=0; t.mesh.frustumCulled=false; t.mesh.instanceMatrix.setUsage(T.DynamicDrawUsage); scene.add(t.mesh);});
+VT.forEach(t=>{const G=[]; t.mk(G); t.geom=mergeGeoms(G); t.mesh=new T.InstancedMesh(t.geom,underShade(new T.MeshLambertMaterial({vertexColors:true})),MAXV); t.mesh.count=0; t.mesh.frustumCulled=false; t.mesh.instanceMatrix.setUsage(T.DynamicDrawUsage); scene.add(t.mesh);});
 const shadowGeom=new T.PlaneGeometry(1,1); shadowGeom.rotateX(-Math.PI/2);
 const shadowMesh=new T.InstancedMesh(shadowGeom,new T.MeshBasicMaterial({color:0x000000,transparent:true,opacity:0.33,depthWrite:false,polygonOffset:true,polygonOffsetFactor:-3,polygonOffsetUnits:-6}),MAXV+1); shadowMesh.frustumCulled=false; shadowMesh.count=0; scene.add(shadowMesh);
 // ego car
 const ego={route:null,s:0,v:0,vdes:0,limit:1e9,active:false,paused:true,done:false,pos:new T.Vector3(),fwd:new T.Vector3(1,0,0),lookF:new T.Vector3(1,0,0)};
 (function(){const G=[]; VT[1].mk(G); const g=mergeGeoms(G); const col=g.attributes.color; for(let i=0;i<col.count;i++){ if(col.getX(i)===1&&col.getY(i)===1&&col.getZ(i)===1) col.setXYZ(i,0.72,0.08,0.08); }
-  ego.mesh=new T.Mesh(g,new T.MeshLambertMaterial({vertexColors:true})); ego.mesh.visible=false; ego.mesh.matrixAutoUpdate=false; scene.add(ego.mesh);
-  const hg=new T.BoxGeometry(1.6,0.05,0.75); hg.translate(0,0.60,1.38); ego.hood=new T.Mesh(hg,new T.MeshLambertMaterial({color:0xa01414})); ego.hood.visible=false; ego.hood.matrixAutoUpdate=false; scene.add(ego.hood);})();
+  ego.mesh=new T.Mesh(g,underShade(new T.MeshLambertMaterial({vertexColors:true}))); ego.mesh.visible=false; ego.mesh.matrixAutoUpdate=false; scene.add(ego.mesh);
+  const hg=new T.BoxGeometry(1.6,0.05,0.75); hg.translate(0,0.60,1.38); ego.hood=new T.Mesh(hg,underShade(new T.MeshLambertMaterial({color:0xa01414}))); ego.hood.visible=false; ego.hood.matrixAutoUpdate=false; scene.add(ego.hood);})();
 const _f=new T.Vector3(), _r=new T.Vector3(), _u=new T.Vector3(), _m=new T.Matrix4(), _p=new T.Vector3(), _col=new T.Color(), _s={};
 function basis(m,pos,f,scaleX,scaleY,scaleZ){ // model: +Z forward, +Y up
   _r.crossVectors(UP,f).normalize(); _u.crossVectors(f,_r).normalize();
