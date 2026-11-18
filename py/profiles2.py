@@ -11,7 +11,7 @@ def envelope(m,g):
     for i in range(len(e)-2,-1,-1): e[i]=max(e[i],e[i+1]-st)
     return e
 def relations(chains,plan,cls,verbose=False):
-    decks=plan['decks']; ids=list(chains.keys()); stack=set(plan.get('stack',()))
+    decks=plan['decks']; ids=[c for c in chains if not chains[c].get('ic')]; stack=set(plan.get('stack',()))
     lines={c:sg.LineString(cls[c]['P']) for c in ids}; tang={}
     for c in ids:
         P=cls[c]['P']; t=np.gradient(P,axis=0); t/=np.hypot(t[:,0],t[:,1])[:,None]+1e-9; tang[c]=t
@@ -84,7 +84,7 @@ def relations(chains,plan,cls,verbose=False):
 def design2(chains,plan,cls,clear=6.8,grade=0.045,passes=4,verbose=False):
     over,pins,par=relations(chains,plan,cls,verbose)
     crossed=set((min(u,l),max(u,l)) for (u,i,l,j) in over)
-    ids=list(chains.keys()); pr={c:(PRIO.index(c) if c in PRIO else 50+k) for k,c in enumerate(ids)}
+    ids=list(chains.keys()); pr={c:(PRIO.index(c) if c in PRIO else 1000+k if chains[c].get('ic') else 50+k) for k,c in enumerate(ids)}
     Gex=plan.get('Gexist'); Gb=Gex.buffer(1.0) if Gex is not None else None
     base={}; need={}; ktrees={c:cKDTree(cls[c]['P']) for c in ids}
     for c in ids:
@@ -107,6 +107,8 @@ def design2(chains,plan,cls,clear=6.8,grade=0.045,passes=4,verbose=False):
         if ch.get('deckclear',0)>20:   # existing bridge: straight chord between abutments
             k=np.where(dk)[0]; a,b=k[0],k[-1]; need[c][dk]=np.interp(k,[a,b],[base[c][a],base[c][b]])
         d['z']=base[c].copy()
+    for c in ('e_south_out','e_south_in'):      # I-26 through the interchange south of State Street (ic_profiles)
+        if c in base: base[c]=base[c]+ic_raise(ic_station(cls,cls[c]['P']))
     # where a bridge crosses one of today's roads in the 2018-design area, let the lower road dip under it
     for (u,i,l,j) in over:
         if not (l.startswith('x') or l.startswith('e_south')): continue
@@ -115,6 +117,7 @@ def design2(chains,plan,cls,clear=6.8,grade=0.045,passes=4,verbose=False):
             m=len(base[l]); t=np.clip(1-np.abs(np.arange(m)-j)*DS/110.0,0,1); base[l]=base[l]-min(lack,5.0)*t*t*(3-2*t)
     for it in range(passes):
         for c in sorted(ids,key=lambda c:pr[c]):
+            if chains[c].get('ic'): continue
             d=cls[c]; m=len(d['z']); mm=need[c].copy()
             for (u,i,l,j) in over:
                 if u!=c: continue
@@ -179,10 +182,25 @@ def design2(chains,plan,cls,clear=6.8,grade=0.045,passes=4,verbose=False):
                 if lack>0: 
                     t=np.clip(1-np.abs(np.arange(m)-i)*DS/(40+lack/grade),0,1); z=z+lack*t*t*(3-2*t)
             d['z']=gs(z,12.0)
+    twin_ties(cls,ids); ic_profiles(chains,cls,plan)
     return cls
+# carriageways of one freeway that the Overture centrelines split too far apart for the side-by-side tie (14 m): within
+# the box, the road through the first point runs at the level of the road through the second (Hominy Creek Road bridge:
+# the north-west carriageway followed the creek valley and climbed 9 m across the deck its twin crosses level)
+TWIN_TIE=[((283704,206480),(283690,206455),(283600,206400,283860,206620))]
+def twin_ties(cls,ids):
+    for pa,pb,bx in TWIN_TIE:
+        dist=lambda c,p: np.hypot(*(cls[c]['P']-np.array(p)).T).min()
+        a=min(ids,key=lambda c:dist(c,pa)); b=min((c for c in ids if c!=a),key=lambda c:dist(c,pb))
+        P=cls[a]['P']; dd,j=cKDTree(cls[b]['P']).query(P)
+        inb=(P[:,0]>bx[0])&(P[:,0]<bx[2])&(P[:,1]>bx[1])&(P[:,1]<bx[3])&(dd<30)
+        w=np.clip(gs(inb.astype(float),25.0),0,1)
+        dz=cls[b]['z'][j]-cls[a]['z']; cls[a]['z']=cls[a]['z']+dz*w
+        print('twin tie',a,'to',b,'over %.0f m, up to %.1f m'%(inb.sum()*DS,np.abs(dz*w).max()))
 HWD={'b0':22.0,'b6':14.0,'b10':12.0,'b23':12.0,'b8':9.0,'b9':9.0,'b25':9.0,'b1':8.0,'b3':7.0,'b7':7.0,'b2':6.0,'b5':6.0}
 def hw(c,chains=None):
     if c in HWD: return HWD[c]
+    if chains and c in chains and chains[c].get('hw'): return chains[c]['hw']
     if c.startswith('e_'): return 9.0
     if c.startswith('x'): return 8.0 if chains and chains[c].get('cls')=='motorway' else 5.0
     if c.startswith('y'): return 6.0
@@ -191,7 +209,7 @@ def split_stacked(chains,plan,cls,verbose=True):
     """Two roads that cross at an angle while both sit on the same bridge outline are stacked, not level: the plan's
     structure fills merge where one bridge passes over another. The road with the longer run on that outline is the
     bridge itself and goes over; the other road's stretch is cut out into its own deck, below."""
-    decks=plan['decks']; ids=[c for c in cls if not c.startswith(('x','e_'))]
+    decks=plan['decks']; ids=[c for c in cls if not c.startswith(('x','e_')) and not chains[c].get('ic')]
     lines={c:sg.LineString(cls[c]['P']) for c in ids}; stack=set(plan.get('stack',()))
     def run(c,i):
         st=cls[c]['st']; k=st[i]; a=i; b=i
@@ -306,7 +324,7 @@ def join_decks(chains,plan,cls,g=4.0,ge=7.0,verbose=True):
       * between the end of a deck and the ground-level pavement the road continues on, up to 2ge apart.
     Pavement of roads running at another level (2 m or more above or below this road there) is left out, so the deck
     does not grow sideways toward a road it passes over. Needs the road heights, so it runs after the design."""
-    decks=plan['decks']; G=plan['G']; ids=[c for c in cls if not c.startswith(('x','e_','y'))]
+    decks=plan['decks']; G=plan['G']; ids=[c for c in cls if not c.startswith(('x','e_','y')) and not chains[c].get('ic')]
     lines={c:sg.LineString(cls[c]['P']) for c in ids}
     def close(U,r): return polyonly(U.buffer(r,join_style=2).buffer(-r,join_style=2).difference(U.buffer(0.01)))
     def give(k,pieces):
@@ -413,7 +431,7 @@ def fill_notches(chains,plan,cls,win=5,verbose=True):
         m=len(a); l=np.array([np.nanmax(a[max(0,i-win):i+1]) for i in range(m)]); r=np.array([np.nanmax(a[i:i+win+1]) for i in range(m)])
         return np.minimum(l,r)
     for c,v in cls.items():
-        if c.startswith(('x','e_','y')): continue
+        if c.startswith(('x','e_','y')) or chains[c].get('ic'): continue
         st=v['st']; P=v['P']; h=hw(c,chains)+1.5
         t=np.gradient(P,axis=0); t/=np.hypot(t[:,0],t[:,1])[:,None]+1e-9; nv=np.c_[-t[:,1],t[:,0]]
         for k in np.unique(st[st>=0]):
@@ -456,7 +474,7 @@ def patch_plan(chains,plan,cls):
         # (an Overture freeway riding a bridge over a street runs down the median here: pave_between_edges paves the
         # carriageways from the plan's edge lines instead)
         if xr and all(decks[k].get('over_street') for k in chains[c]['ride']): xr=False
-        if (c.startswith('x') and not xr) or c.startswith('y'): continue
+        if (c.startswith('x') and not xr) or c.startswith('y') or chains[c].get('ic'): continue
         P=d['P']; st=d['st']; pts=shapely.points(P); h=hw(c,chains); ls=sg.LineString(P)
         inG=shapely.contains(Gb,pts); inD=shapely.contains(DU.buffer(0.6),pts)
         m=(st<0)&~inG
@@ -641,6 +659,120 @@ def pave_ramp_gaps(plan,chains):
         fill=polyonly(fill.difference(sg.MultiPolygon(parts)))
         merge_fill(plan,parts,fill,box)
         print('paved %.0f m2 of ramp between edge lines along'%fill.area,c,'in',bx,'(shoulders to %.1f / %.1f m)'%(sl,sr))
+# The interchange 650 m south of State Street. The 2018 design bridges both I-26 carriageways (IC_DECK) over a new road
+# between two roundabouts. Section A borrows today's road levels, and today's I-26 is split-level here: the south-bound
+# carriageway and a ramp run up to 15 m above the north-bound one. Laid on the 2018 layout, that put the new south-bound
+# carriageway on today's ramp, the bridge on it 10 m above the drives, and the roundabout road at I-26's own level.
+# Here the plan's roads get their own centrelines ('ic_' chains) and profiles instead, and today's roads are cleared
+# from the area:
+#  * I-26: today's north-bound level, raised IC_RAISE (the hillside the new line is cut into is about that much higher);
+#    today's I-26 (e_south, which the drives follow) is raised with it
+#  * the road under the bridge IC_CLEAR below the bridge's lowest point, the roundabouts at about that level
+#  * the ramps straight from their roundabout to where they meet I-26
+IC_REF=(284602,207501)              # station 0 along today's I-26 (e_south_out); stations increase to the south-west
+IC_RAISE=(4.0,-300.0,0.0,400.0,650.0)   # m: full from station 0 to 400, tapering to nothing at -300 and at 650
+IC_DECK=(284600,207521); IC_CLEAR=7.2; IC_ZONE=30.0; IC_SMOOTH=60.0
+IC_W=(284540,207532); IC_E=(284700,207502)   # roundabout centres
+# name: (role, half-width, centreline points; ramps and legs start at their roundabout)
+IC_ROADS={
+ 'ic_nb':('main',6.0,[(284046,207175),(284088,207197),(284134,207221),(284177,207243),(284223,207267),(284266,207289),(284312,207313),(284354,207336),(284400,207360),(284443,207382),(284488,207407),(284528,207434),(284568,207467),(284601,207500),(284631,207539),(284655,207585),(284675,207629),(284691,207678),(284704,207724),(284711,207751),(284718,207776),(284724,207800),(284731,207822),(284737,207845),(284743,207867),(284750,207889),(284759,207910)]),
+ 'ic_sb':('main',6.0,[(284036,207194),(284078,207216),(284124,207240),(284167,207262),(284213,207287),(284256,207308),(284302,207333),(284344,207355),(284391,207379),(284433,207401),(284477,207426),(284515,207451),(284553,207483),(284582,207517),(284611,207551),(284636,207595),(284654,207636),(284670,207683),(284682,207729),(284689,207756),(284695,207777),(284700,207798),(284706,207823),(284710,207850),(284716,207876),(284724,207899),(284733,207921)]),
+ 'ic_cn':('under',8.0,[IC_W,(284558,207531),(284576,207529),(284620,207520),(284662,207511),(284682,207506),IC_E]),
+ 'ic_wr':('ringW',4.5,[(IC_W[0]+14*np.cos(a),IC_W[1]+14*np.sin(a)) for a in np.linspace(0,2*np.pi,25)]),
+ 'ic_er':('ringE',4.5,[(IC_E[0]+13.5*np.cos(a),IC_E[1]+13.5*np.sin(a)) for a in np.linspace(0,2*np.pi,25)]),
+ 'ic_wn':('rampW',3.5,[IC_W,(284552,207550),(284565,207568),(284580,207590),(284597,207615),(284612,207645),(284627,207675),(284641,207713),(284651,207736),(284663,207762),(284670,207779),(284677,207796),(284690,207824),(284698,207840)]),
+ 'ic_ws':('rampW',4.0,[IC_W,(284527,207512),(284514,207494),(284497,207478),(284478,207465),(284462,207453),(284441,207436),(284422,207422),(284402,207409),(284381,207398),(284356,207385),(284334,207374),(284313,207362),(284292,207352),(284267,207339),(284246,207327),(284203,207306),(284157,207281),(284115,207259),(284068,207235),(284026,207213)]),
+ 'ic_en':('rampE',3.5,[IC_E,(284703,207522),(284706,207540),(284710,207560),(284714,207590),(284718,207620),(284722,207643),(284723,207669),(284722,207696),(284721,207720),(284723,207748),(284725,207770)]),
+ 'ic_es':('rampE',4.0,[IC_E,(284688,207487),(284672,207472),(284655,207460),(284630,207448),(284600,207434),(284572,207418),(284548,207407),(284524,207397),(284500,207387),(284474,207375),(284452,207364),(284431,207353),(284410,207342),(284385,207329),(284364,207318),(284342,207307),(284321,207296),(284296,207283),(284275,207271),(284232,207249),(284186,207225),(284144,207203),(284099,207176),(284061,207145)]),
+ 'ic_ee':('rampE',8.0,[IC_E,(284722,207500),(284745,207494),(284780,207486),(284820,207476),(284860,207466),(284900,207456),(284960,207445)]),
+}
+IC_END={'ic_ee':607.0}      # where a leg ends on a road the interchange does not cover (else it ends at I-26's level)
+def ic_centre(pts,PV,step=5.0):
+    """resample a hand-traced centreline and move each station to the middle of the pavement band it lies in (bands 4 to
+    20 m wide; on wider pavement, such as a bridge carrying both carriageways, the traced line is kept)"""
+    s_,P=resample(np.asarray(pts,float),step); t=np.gradient(P,axis=0); t/=np.hypot(t[:,0],t[:,1])[:,None]+1e-9; nv=np.c_[-t[:,1],t[:,0]]
+    off=np.arange(-14,14.01,0.5); sh=np.zeros(len(P)); ok=np.zeros(len(P),bool)
+    for i in range(len(P)):
+        inn=shapely.contains(PV,shapely.points(P[i]+off[:,None]*nv[i])); j=len(off)//2
+        if not inn[j]: continue
+        a=j; b=j
+        while a>0 and inn[a-1]: a-=1
+        while b<len(off)-1 and inn[b+1]: b+=1
+        if 0<a and b<len(off)-1 and 4<=off[b]-off[a]<=20: sh[i]=(off[a]+off[b])/2; ok[i]=True
+    if ok.any(): sh=np.interp(np.arange(len(P)),np.where(ok)[0],sh[ok])
+    sh=gs(sh,15.0)
+    return P+sh[:,None]*nv
+def ic_build(plan,chains):
+    """add the interchange's chains, clear today's roads from it and pave the road under the bridge"""
+    k=deck_at(plan,IC_DECK); dk=plan['decks'][k]
+    dk['drawn']=True; dk['over_street']=True; plan['ic_deck']=k
+    PV=shapely.unary_union([plan['G']]+[d['poly'] for d in plan['decks']]); shapely.prepare(PV)
+    for c,(role,h,pts) in IC_ROADS.items():
+        xy=np.asarray(pts,float) if role.startswith('ring') else ic_centre(pts,PV)
+        if role.startswith('ramp') or role=='under': xy[0]=np.asarray(pts[0],float)    # legs start at the roundabout's centre
+        chains[c]={'xy':xy,'ic':role,'hw':h,'sig':45.0,'cls':'motorway' if role in ('main','rampW','rampE') else 'trunk',
+                   'decks':[k] if role=='main' else []}
+        if role=='main': chains[c]['ride']=[k]; chains[c]['ride_min']=20.0
+    zone=shapely.unary_union([sg.LineString(chains[c]['xy']).buffer(IC_ZONE) for c in IC_ROADS]); plan['ic_zone']=zone
+    # today's roads in the area (Overture centrelines: the split-level I-26, its ramps, the streets the roundabouts replace)
+    for c in [c for c in chains if c.startswith('x')]:
+        ls=sg.LineString(chains[c]['xy'])
+        if not ls.intersects(zone): continue
+        rest=[g for g in getattr(ls.difference(zone),'geoms',[ls.difference(zone)]) if g.geom_type=='LineString' and g.length>60]
+        rest.sort(key=lambda g:-g.length)
+        print('interchange: today\'s road',c,'cleared over %.0f m'%(ls.length-sum(g.length for g in rest)),'(%d piece(s) kept)'%len(rest))
+        if not rest: del chains[c]; continue
+        chains[c]=dict(chains[c],xy=np.array(rest[0].coords))
+        for q,g in enumerate(rest[1:]): chains[f'{c}_{q+1}']=dict(chains[c],xy=np.array(g.coords))
+    # the road under the bridge: paved through it (the plan's pavement stops at the bridge outline)
+    cn=sg.LineString(chains['ic_cn']['xy'])
+    fill=polyonly(cn.buffer(IC_ROADS['ic_cn'][1]-0.3,cap_style=2).intersection(dk['poly'].buffer(1.0)))
+    parts=list(getattr(plan['G'],'geoms',[plan['G']]))
+    merge_fill(plan,parts,polyonly(fill.difference(sg.MultiPolygon(parts))),dk['poly'].buffer(5.0))
+    print('interchange: %d roads, bridge %d over the roundabout road, %.0f m2 paved under it'%(len(IC_ROADS),k,fill.area))
+def ic_station(cls,P):
+    ls=sg.LineString(cls['e_south_out']['P'])
+    return shapely.line_locate_point(ls,shapely.points(P))-ls.project(sg.Point(*IC_REF))
+def ic_raise(s):
+    a,s0,s1,s2,s3=IC_RAISE; ss=lambda u:np.clip(u,0,1)**2*(3-2*np.clip(u,0,1))
+    return a*np.minimum(ss((s-s0)/(s1-s0)),1-ss((s-s2)/(s3-s2)))
+def ic_along(cls,a,b):
+    """for each station of chain a: (arc length along chain b of its nearest point, distance)"""
+    lb=sg.LineString(cls[b]['P']); pts=shapely.points(cls[a]['P'])
+    return shapely.line_locate_point(lb,pts),shapely.distance(lb,pts)
+def ic_profiles(chains,cls,plan):
+    """heights of the interchange's roads, from I-26's (today's north-bound level, raised)"""
+    ref=cls['e_south_out']; nb=cls['ic_nb']; sb=cls['ic_sb']
+    # I-26: the raised level, carried across onto the new north-bound line, then smoothed along it (today's line runs up
+    # to 25 m east of the new one and the curves differ: carried across as it is, the grade comes out uneven)
+    u,_=ic_along(cls,'ic_nb','e_south_out'); z0=np.interp(u,ref['s'],ref['z'])
+    s=nb['s']; f=np.clip(np.minimum(s,s[-1]-s)/80.0,0,1); f=f*f*(3-2*f)
+    nb['z']=z0+f*(gs(z0,IC_SMOOTH)-z0)
+    u,_=ic_along(cls,'ic_sb','ic_nb'); z1=np.interp(u,s,nb['z'])
+    f1=np.clip(np.minimum(sb['s'],sb['s'][-1]-sb['s'])/80.0,0,1); f1=f1*f1*(3-2*f1); sb['z']=z1+f1*(gs(z1,IC_SMOOTH)-z1)
+    # today's I-26, which the drives follow, at the same level where it runs beside the new line
+    for c in ('e_south_out','e_south_in'):
+        d=cls[c]; u,dd=ic_along(cls,c,'ic_nb'); w=np.interp(u,s,f)*(dd<40)
+        d['z']=d['z']+w*(np.interp(u,s,nb['z'])-d['z'])
+    k=plan['ic_deck']
+    zd=min(cls[c]['z'][cls[c]['st']==k].min() for c in ('ic_nb','ic_sb'))
+    zc=zd-IC_CLEAR; zW=zc+0.3; zE=zc+2.0
+    d=cls['ic_cn']; s_=d['s']; ond=shapely.contains(plan['decks'][k]['poly'].buffer(4.0),shapely.points(d['P']))
+    a,b=s_[ond][0],s_[ond][-1]
+    d['z']=gs(np.interp(s_,[0,20,a,b,s_[-1]-20,s_[-1]],[zW,zW,zc,zc,zE,zE]),8.0)
+    cls['ic_wr']['z']=np.full(len(cls['ic_wr']['s']),zW); cls['ic_er']['z']=np.full(len(cls['ic_er']['s']),zE)
+    for c,(role,h,pts) in IC_ROADS.items():
+        if not role.startswith('ramp'): continue
+        d=cls[c]; s_=d['s']; z_=zW if role=='rampW' else zE
+        if c in IC_END: z1=IC_END[c]
+        else:
+            m=min(('ic_nb','ic_sb'),key=lambda o:sg.LineString(cls[o]['P']).distance(sg.Point(*d['P'][-1])))
+            z1=float(np.interp(sg.LineString(cls[m]['P']).project(sg.Point(*d['P'][-1])),cls[m]['s'],cls[m]['z']))
+        d['z']=gs(np.interp(s_,[0,20,s_[-1]],[z_,z_,z1]),12.0)
+    for c in IC_ROADS:
+        g=np.abs(np.gradient(cls[c]['z'],cls[c]['s'])).max()*100
+        print('interchange %-6s %6.1f .. %6.1f m, max grade %.1f%%'%(c,cls[c]['z'].min(),cls[c]['z'].max(),g))
+    print('interchange: bridge lowest %.1f, road under it %.1f, roundabouts %.1f / %.1f'%(zd,zc,zW,zE))
 def add_axis_chains(chains,plan,cls):
     """a bridge nobody rides: bend the nearest parallel local road onto its long axis so it crosses on the bridge"""
     riders=set()
@@ -746,7 +878,7 @@ def load_all():
             if g.geom_type=='LineString' and g.length>60: chains[f'x{n}']={'xy':np.array(g.coords),'sig':45.0,'sig_ex':30.0,'cls':r['cls']}; n+=1
     print('x chains',n)
     freeway_over(plan,chains)
-    plan['G']=G; pave_between_edges(plan,chains); pave_ramp_gaps(plan,chains)
+    plan['G']=G; pave_between_edges(plan,chains); pave_ramp_gaps(plan,chains); ic_build(plan,chains)
     pickle.dump(plan,open(W+'/sheets_plan2.pkl','wb'))
     return plan,chains
 if __name__=='__main__':

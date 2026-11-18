@@ -29,7 +29,8 @@ def run(planfile='/sheets_plan2.pkl'):
                 m=ext
             groups.setdefault(int(k),[]).append((cKDTree(d['P'][m]),d['z'][m],c))
     from profiles2 import hw
-    chains=pr['chains']
+    chains=pr['chains']; ICC={c for c in chains if chains[c].get('ic')}; ICZ=plan.get('ic_zone'); IC_FADE=15.0
+    if ICZ is not None: shapely.prepare(ICZ)
     allst=[(cKDTree(d['P']),d['z'],c) for c,d in cls.items()]
     allup=[(cKDTree(d['P'][d['st']>=0]),d['z'][d['st']>=0],c) for c,d in cls.items() if (d['st']>=0).any()]
     DU=shapely.unary_union([d['poly'] for d in plan['decks']]).buffer(1.0); shapely.prepare(DU)
@@ -46,6 +47,7 @@ def run(planfile='/sheets_plan2.pkl'):
         if not gl:
             fallback=True; best=None      # deck without a riding alignment: use the alignment with the longest run across it
             for c,d in cls.items():
+                if c in ICC: continue
                 n_in=int(shapely.contains(s['poly'].buffer(1.0),shapely.points(d['P'])).sum())
                 if n_in and (best is None or n_in>best[0]): best=(n_in,c)
             gl=[(cKDTree(cls[best[1]]['P']),cls[best[1]]['z'],best[1])] if best else allst
@@ -67,21 +69,35 @@ def run(planfile='/sheets_plan2.pkl'):
             Er[gi,ok]=Ed[gi,ok]
             # ground-level pavement next to a bridge is a ground-level road's unless none is within 8 m of it
             if key<0 and gi>=len(gl): Ed[gi,ok]+=8.0
-        if len(cand):
+        def mix(sel):
+            if not sel.any(): return np.full(len(P),np.nan),np.zeros(len(P)),np.full(len(P),1e9)
+            D_,Zc_,Mr_,Ed_,Er_=D[sel],Zc[sel],Mr[sel],Ed[sel],Er[sel]
             # a point belongs to the road whose carriageway it lies in, else to the one whose edge is nearest (a wide
             # road must not claim the aprons of a narrow ramp beside it just because its half-width is large)
-            n0=np.argmin(np.where(np.isfinite(Mr),Ed+0.01*Mr,np.inf),axis=0); dmin=D.min(axis=0); z0=Zc[n0,np.arange(len(P))]
+            n0=np.argmin(np.where(np.isfinite(Mr_),Ed_+0.01*Mr_,np.inf),axis=0); dmin=D_.min(axis=0); z0=Zc_[n0,np.arange(len(P))]
             # blend only with roads whose edge is about as near as that road's: pavement inside one carriageway keeps its
             # level even with another road a few metres higher beyond the verge (I-26 and the I-26 to I-240 East ramp
             # landing side by side on the hill west of the river)
             # (fading back to the full blend over the first 6 m outside the carriageway, so there is no crease at its edge)
-            e0=Er[n0,np.arange(len(P))][None,:]
-            far=np.clip((np.where(np.isfinite(Er),Er,1e9)-e0-2.0)/3.0,0,1); keepw=1-far*(1-np.clip(e0/6.0,0,1)) if key<0 else 1.0
-            Wt=np.where(np.isfinite(D)&(np.abs(Zc-z0[None,:])<4.0),keepw/(np.where(np.isfinite(Mr),Mr,0)**2+0.05)**2,0.0)
-            num=(Wt*Zc).sum(0); den=Wt.sum(0)
+            e0=Er_[n0,np.arange(len(P))][None,:]
+            far=np.clip((np.where(np.isfinite(Er_),Er_,1e9)-e0-2.0)/3.0,0,1); keepw=1-far*(1-np.clip(e0/6.0,0,1)) if key<0 else 1.0
+            Wt=np.where(np.isfinite(D_)&(np.abs(Zc_-z0[None,:])<4.0),keepw/(np.where(np.isfinite(Mr_),Mr_,0)**2+0.05)**2,0.0)
+            num=(Wt*Zc_).sum(0); den=Wt.sum(0)
+            return np.where(den>0,num/np.maximum(den,1e-30),np.nan),den,dmin
+        icm=np.array([c in ICC for (_,_,c) in cand],bool)
+        if key>=0: zi,den,dmin=mix(np.ones(len(cand),bool))
         else:
-            num=np.zeros(len(P)); den=np.zeros(len(P)); dmin=np.full(len(P),1e9)
-        zi=np.where(den>0,num/np.maximum(den,1e-30),np.nan)
+            zi,den,dmin=mix(~icm)
+            # the interchange south of State Street (profiles2.ic_build): its own roads' levels, today's roads' outside
+            # it, blended over the zone's outer IC_FADE m
+            wz=np.zeros(len(P))
+            if ICZ is not None and icm.any() and s['poly'].intersects(ICZ):
+                pts=shapely.points(P); inz=shapely.contains(ICZ,pts)
+                if inz.any(): u=np.clip(shapely.distance(ICZ.boundary,pts[inz])/IC_FADE,0,1); wz[inz]=u*u*(3-2*u)
+            if (wz>0).any():
+                zb,denb,dminb=mix(icm); m=(wz>0)&(denb>0); both=m&(den>0)
+                zi=np.where(both,wz*zb+(1-wz)*np.nan_to_num(zi),np.where(m,zb,zi))
+                dmin=np.where(both,wz*dminb+(1-wz)*dmin,np.where(m,dminb,dmin)); den=np.where(m,np.maximum(den,denb),den)
         if key<0:
             wa=np.clip((50.0-dmin)/30.0,0,1); wa=wa*wa*(3-2*wa)
             zz_=np.where(den>0,zi*wa+zt[off[i]:off[i+1]]*(1-wa),zt[off[i]:off[i+1]])

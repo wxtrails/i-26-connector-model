@@ -84,7 +84,7 @@ def classify(chains,plan,noride=(),straddle=None):
                         i=j+1
                     else: i+=1
         # stay on the structure a road is already on (see continue_runs)
-        if cid not in noride and straddle is not None and not cid.startswith(('x','e_')):
+        if cid not in noride and straddle is not None and not cid.startswith(('x','e_')) and not ch.get('ic'):
             st=continue_runs(cid,s,P,st,decks,dpoly,straddle(cid,chains))
         # fill short at-grade gaps between deck runs, except where the plans end both bridges at the gap (see lands)
         i=0
