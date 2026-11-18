@@ -109,7 +109,9 @@ def run():
             for a in polys_of(f): 
                 if len(a)>3: wat.append(sg.Polygon(a).buffer(4))
     excl=rasterize([(g,1) for g in [U.buffer(9)]+[p.buffer(4) for p in polys]+rl+wat],out_shape=(H_,W_),transform=T,fill=0,dtype='uint8').astype(bool)
-    near=rasterize([(RL.buffer(380),1)],out_shape=(H_,W_),transform=T,fill=0,dtype='uint8').astype(bool)
+    # each route buffered on its own, then merged: the same area as buffering their union, but buffering the union (the
+    # routes overlap and cross thousands of times) took minutes and gigabytes
+    near=rasterize([(shapely.unary_union([sg.LineString(r['P']).buffer(380) for r in R]),1)],out_shape=(H_,W_),transform=T,fill=0,dtype='uint8').astype(bool)
     ok=veg&~excl&near; ii=np.argwhere(ok); print('veg px',len(ii))
     lin=ii[:,0].astype(np.int64)*W_+ii[:,1]; pick=u01(lin,1)<TREE_P; sel=ii[pick]; lin=lin[pick]
     tx=SX0+(sel[:,1]+u01(lin,2))*px; ty=SY1-(sel[:,0]+u01(lin,3))*px
