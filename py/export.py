@@ -56,6 +56,10 @@ def stage_roads(surf):
     Gclear=Gp.buffer(2.0); shapely.prepare(Gclear)
     from scipy.spatial import cKDTree
     _cls=pickle.load(open(W+'/profiles.pkl','rb'))['cls']; riders={}
+    # along levelfix.py's strict deck edges the ground pavement beside the deck is another carriageway at its level (the
+    # north-bound lanes beside the south-bound bridge): the barrier stays
+    import levelfix as LF
+    _,SE=LF.build(plan,_cls); SEQ=shapely.unary_union(SE) if SE else None
     for c_,v_ in _cls.items():
         for k_ in np.unique(v_['st'][v_['st']>=0]): riders.setdefault(int(k_),[]).append(v_['P'][v_['st']==k_])
     dsheets=[(i,s) for i,s in enumerate(surf.sheets) if s['kind']=='D']
@@ -94,6 +98,7 @@ def stage_roads(surf):
                     z2=surf.z_on(i2,Q); cont|=np.isfinite(z2)&(np.abs(z2-zm)<1.0)
             # (single stray panels are not joins: need two in a row)
             cont&=(np.r_[cont[1:],cont[:1]]|np.r_[cont[-1:],cont[:-1]])
+            if SEQ is not None: cont&=~shapely.dwithin(SEQ,mp,1.5)
             nopen+=int((cont&~open_).sum()); open_|=cont
             for k in range(len(pts)-1):
                 a,b=pts[k],pts[k+1]; za,zb=zz[k],zz[k+1]

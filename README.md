@@ -43,7 +43,7 @@ Verified: from this folder, `terrain.py`, `export.py` and `web/build.py` reprodu
 - Beyond the plan limits (I-240 east, Patton Ave into downtown and West Asheville, US 19/23 north) roads are simplified Overture centrelines.
 - Imagery is pre-construction (Nov 2019); storefront facades and signs are generated from Overture place names, not photos.
 - Bridges are the only things that cast shadows. The viewer works them out at load time from the deck surfaces (`buildUnderShade` in `core.js`): ground, roads, lower decks, piers and cars are darkened straight under a deck (`US_K.x`) and in its shadow from the scene's fixed sun (`US_K.y`). Each deck has a flat underside 1.7 m below its surface, in a darker grey.
-- Hand-tuned spots: `BRIDGE_REACH` in `profiles2.py` (Brevard Road bridge spans the southern collector too), `RIDE` in `profiles2.py` (which road rides which bridge), and the landmark label list in `export.py`.
+- Hand-tuned spots: `BRIDGE_REACH` in `profiles2.py` (Brevard Road bridge spans the southern collector too), `RIDE` in `profiles2.py` (which road rides which bridge), the pavement level fixes in `levelfix.py` (where the nearest-road rule hands pavement beside a bridge to the wrong road, e.g. the I-240 East ramp's shoulder and the north-bound lanes' edge at the north end of the river bridges), and the landmark label list in `export.py`.
 
 ## Testing
 `node web/shot.js out.html '[{"cam":[x,y,elev,tx,ty,elev],"out":"a.png"}]' 1200 750` renders views in headless Chromium (about a minute each on software GL). `node web/play.js out.html` starts every route and checks it reaches the end with no console errors.

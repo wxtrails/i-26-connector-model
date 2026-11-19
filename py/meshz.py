@@ -34,6 +34,12 @@ def run(planfile='/sheets_plan2.pkl'):
     allst=[(cKDTree(d['P']),d['z'],c) for c,d in cls.items()]
     allup=[(cKDTree(d['P'][d['st']>=0]),d['z'][d['st']>=0],c) for c,d in cls.items() if (d['st']>=0).any()]
     DU=shapely.unary_union([d['poly'] for d in plan['decks']]).buffer(1.0); shapely.prepare(DU)
+    # hand-placed level fixes (levelfix.py): pavement within 1.5 m of one of their deck edges is under a bridge only if
+    # it is more than 0.3 m inside the deck itself, and the pavement in their regions takes the level of the road named
+    import levelfix as LF
+    SREG,SE=LF.build(plan,cls); SEAMQ=shapely.unary_union(SE) if SE else None
+    DRAW=shapely.unary_union([d['poly'] for d in plan['decks']]).buffer(-0.3); shapely.prepare(DRAW)
+    SREG=[(g,c,cKDTree(cls[c]['P'])) for g,c in SREG]
     import caps as CP
     CAPS=CP.build(plan,cls); print('clearance caps',len(CAPS)); nlow=0
     # a freeway bridge over a street keeps its cap for the ground under it (terrain.py cuts the street's corridor), but
@@ -64,6 +70,9 @@ def run(planfile='/sheets_plan2.pkl'):
                 if n_in and (best is None or n_in>best[0]): best=(n_in,c)
             gl=[(cKDTree(cls[best[1]]['P']),cls[best[1]]['z'],best[1])] if best else allst
         under=shapely.contains(DU,shapely.points(P)) if key<0 else None
+        if key<0 and SEAMQ is not None and s['poly'].distance(SEAMQ)<2.0:
+            nr_=shapely.dwithin(SEAMQ,shapely.points(P),1.5)
+            if nr_.any(): under[nr_]=shapely.contains(DRAW,shapely.points(P[nr_]))
         behind=GF.behind(WB,P) if key<0 and QB is not None and s['poly'].intersects(QB.buffer(1.0)) else None
         cand=gl+(allup if key<0 else []); D=np.full((len(cand),len(P)),np.inf); Zc=np.zeros((len(cand),len(P))); Mr=np.full((len(cand),len(P)),np.inf); Ed=np.full((len(cand),len(P)),np.inf); Er=np.full((len(cand),len(P)),np.inf)
         for gi,(tree,zz,c) in enumerate(cand):
@@ -116,6 +125,9 @@ def run(planfile='/sheets_plan2.pkl'):
         if key<0:
             wa=np.clip((50.0-dmin)/30.0,0,1); wa=wa*wa*(3-2*wa)
             zz_=np.where(den>0,zi*wa+zt[off[i]:off[i+1]]*(1-wa),zt[off[i]:off[i+1]])
+            for g_,c_,kt_ in SREG:
+                inr=shapely.contains(g_,shapely.points(P))
+                if inr.any(): zz_[inr]=cls[c_]['z'][kt_.query(P[inr])[1]]
             cf=CP.field(CAPG,P[:,0],P[:,1]); nlow+=int((zz_>cf+0.05).sum()); zz_=np.minimum(zz_,cf)
         else:
             zz_=np.where(den>0,zi,zt[off[i]:off[i+1]]+6)

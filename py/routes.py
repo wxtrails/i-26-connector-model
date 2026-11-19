@@ -79,9 +79,29 @@ class Builder:
             else: dd=np.zeros(len(P))
             o=5.4*np.clip(1-dd/9.0,0,1); o=gaussian_filter1d(o,6,mode='nearest'); return P+nr*o[:,None]
         return P+nr*off
-    def join(self,A,B):
+    def zc(self,c,P):
+        """profile level of chain c at the stations nearest points P"""
+        cc=c if 'z' in self.cls[c] else c[:-3]+'_out'
+        if 'z' not in self.cls.get(cc,{}): return np.full(len(P),np.nan)
+        z=self.cls[cc]['z']; z=z[::-1] if cc!=c else z      # an '_in' chain is its '_out' run backwards
+        return z[self.ctree(c).query(np.atleast_2d(P))[1]]
+    def join(self,A,B,ca=None,cb=None,reach=30.0,tol=1.0):
         lA,lB=sg.LineString(A),sg.LineString(B); X=lA.intersection(lB)
         pts=[g for g in (X.geoms if hasattr(X,'geoms') else [X]) if g.geom_type=='Point']
+        if pts and ca is not None and cb is not None:
+            # roads that cross at different levels (one on a bridge over the other) do not join where their lines cross:
+            # move over where the two are level and within reach m of each other (the next leg's point nearest this
+            # one's line), e.g. I-26 south to the I-240 East ramp 500 m before the ramp dives under I-26's bridge
+            Q=np.array([[g.x,g.y] for g in pts]); lvl=np.abs(self.zc(ca,Q)-self.zc(cb,Q))<1.5
+            if not lvl.any():
+                pB=shapely.points(B); d=shapely.distance(lA,pB); sA=shapely.line_locate_point(lA,pB)
+                QA=shapely.get_coordinates(shapely.line_interpolate_point(lA,sA))
+                ok=(d<reach)&(np.abs(self.zc(ca,QA)-self.zc(cb,B))<tol)
+                if ok.any():
+                    i=int(np.argmin(np.where(ok,d,np.inf))); sa,sb=float(sA[i]),lB.project(sg.Point(*B[i]))
+                    a=np.array(so.substring(lA,0,max(sa,1.0)).coords); b=np.array(so.substring(lB,min(sb,lB.length-1.0),lB.length).coords)
+                    return a,b,float(np.hypot(*(a[-1]-b[0])))
+            else: pts=[g for g,k in zip(pts,lvl) if k]
         if pts:
             p=max(pts,key=lambda g:lA.project(g)); sa,sb=lA.project(p),lB.project(p)
         else:
@@ -125,7 +145,7 @@ class Builder:
         paths=[self.leg(c,d,off) for (c,d,off,two,v) in legs]
         segs=[paths[0]]; joints=[]
         for k in range(1,len(paths)):
-            a,b,gap=self.join(segs[-1],paths[k]); segs[-1]=a; segs.append(b)
+            a,b,gap=self.join(segs[-1],paths[k],legs[k-1][0],legs[k][0]); segs[-1]=a; segs.append(b)
         P=[];leg_id=[]
         for k,s in enumerate(segs):
             s=resamp(s,4.0) if len(s)>1 else s
